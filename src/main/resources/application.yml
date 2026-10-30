@@ -14,6 +14,20 @@ spring:
       # First run against an empty database: set DDL_AUTO=update (or use a migration tool).
       ddl-auto: update
 
+
+logging:
+  pattern:
+    # req = request id, user / pg = who made the call. SQL lines share the id of the request that ran them.
+    level: "%5p [%X{req:--}|%X{user:--}|pg=%X{pg:--}]"
+  level:
+    com.pg: ${APP_LOG_LEVEL:INFO}
+    # SQL statements. Set SQL_LOG_LEVEL=INFO to silence.
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:DEBUG}
+    # Bound parameter values (? placeholders). TRACE to enable. Values can include personal data and
+    # password hashes, so this is off unless you ask for it (or use the "dev" profile).
+    org.hibernate.orm.jdbc.bind: ${SQL_BIND_LOG_LEVEL:INFO}
+    org.hibernate.SQL_SLOW: INFO			
+
 app:
   timezone: ${APP_TIMEZONE:Asia/Kolkata}
   jwt:
