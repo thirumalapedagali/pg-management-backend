@@ -1,0 +1,16 @@
+# Local development only: in-memory H2, throw-away secrets. Never use this profile in production.
+# Run: ./mvnw spring-boot:run -Dspring-boot.run.profiles=dev
+spring:
+  datasource:
+    url: jdbc:h2:mem:pgdb;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+
+app:
+  jwt:
+    secret: dev-only-secret-dev-only-secret-dev-only-1234
+  bootstrap-admin:
+    password: DevAdmin#123

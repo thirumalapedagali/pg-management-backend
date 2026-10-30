@@ -1,0 +1,21 @@
+target/
+.mvn/wrapper/maven-wrapper.jar
+HELP.md
+
+# Secrets - never commit
+.env
+.env.*
+!.env.example
+application-local.yml
+application-local.properties
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+.classpath
+.project
+.factorypath
+.settings/
+.apt_generated/
+.sts4-cache/

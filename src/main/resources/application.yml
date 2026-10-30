@@ -1,0 +1,29 @@
+server:
+  port: ${PORT:8083}
+
+spring:
+  application:
+    name: pg-management-backend
+  datasource:
+    url: jdbc:postgresql://ep-purple-paper-b4s4wo89-pooler.c-6.us-east-2.aws.neon.tech/neondb?user=neondb_owner&password=npg_94UfktILAMWl&sslmode=require&channelBinding=require
+#    username: ${DB_USER}
+#    password: ${DB_PASSWORD}
+  jpa:
+    open-in-view: false
+    hibernate:
+      # First run against an empty database: set DDL_AUTO=update (or use a migration tool).
+      ddl-auto: update
+
+app:
+  timezone: ${APP_TIMEZONE:Asia/Kolkata}
+  jwt:
+    # Required, >= 32 bytes. There is intentionally no default outside the "dev" profile. //${JWT_SECRET:}
+    secret: MY_SUPER_SECRET_JWT_KEY_32_CHAR_MINIMUM
+    expiry-hours: 2
+    refresh-grace-days: 1 #${JWT_REFRESH_GRACE_DAYS:7}
+  cors:
+    origins: ${CORS_ORIGINS:http://localhost:8081,http://localhost:3000}
+  bootstrap-admin:
+    username: ${BOOTSTRAP_ADMIN_USERNAME:superadmin}
+    mobile: ${BOOTSTRAP_ADMIN_MOBILE:9999999999}
+    password: ${BOOTSTRAP_ADMIN_PASSWORD:}
