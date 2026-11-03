@@ -28,15 +28,28 @@ public class PgService {
 
 	public record PgRequest(@NotBlank @Size(max = 120) String name, String ownerName,
 			@Pattern(regexp = "\\d{10,15}", message = "must be 10-15 digits") String mobile, String email,
-			String address, String city, String state, String plan,
+			String address, String city, String state, String plan, Integer totalFloors,
+			String stayType, String unitLabel, String locationUrl,
+			String genderType, String upiId, String upiName, String description, String amenities,
+			java.math.BigDecimal startingPrice,
 			/* First owner login for this PG */
 			@NotBlank @Size(max = 60) String ownerUsername,
 			@NotBlank @Pattern(regexp = "\\d{10,15}", message = "must be 10-15 digits") String ownerMobile,
 			@NotBlank @Size(min = 8, max = 100) String ownerPassword) {
 	}
 
+	public record UpdatePgProfileRequest(@NotBlank @Size(max = 120) String name, String ownerName,
+			String mobile, String email, String address, String city, String state, Integer totalFloors,
+			String stayType, String unitLabel, String locationUrl,
+			String genderType, String upiId, String upiName, String description, String amenities,
+			java.math.BigDecimal startingPrice) {
+	}
+
 	public record PgResponse(Long id, String name, String ownerName, String mobile, String email, String address,
-			String city, String state, String plan, LocalDateTime licenseExpiry, boolean active) {
+			String city, String state, String plan, Integer totalFloors,
+			String stayType, String unitLabel, String locationUrl,
+			String genderType, String upiId, String upiName, String description, String amenities,
+			java.math.BigDecimal startingPrice, LocalDateTime licenseExpiry, boolean active) {
 	}
 
 	private final PgRepository pgs;
@@ -70,6 +83,17 @@ public class PgService {
 		pg.setCity(r.city());
 		pg.setState(r.state());
 		pg.setPlan(r.plan());
+		pg.setTotalFloors(r.totalFloors() != null && r.totalFloors() > 0 ? r.totalFloors() : 3);
+		pg.setStayType(r.stayType() != null && !r.stayType().isBlank() ? r.stayType().trim().toUpperCase() : "PG");
+		String defaultUnit = "APARTMENT".equalsIgnoreCase(r.stayType()) ? "Flat" : "HOSTEL".equalsIgnoreCase(r.stayType()) ? "Dorm" : "Room";
+		pg.setUnitLabel(r.unitLabel() != null && !r.unitLabel().isBlank() ? r.unitLabel().trim() : defaultUnit);
+		pg.setLocationUrl(r.locationUrl() != null && !r.locationUrl().isBlank() ? r.locationUrl().trim() : null);
+		pg.setGenderType(r.genderType() != null && !r.genderType().isBlank() ? r.genderType().trim() : "CO_LIVING");
+		pg.setUpiId(r.upiId() != null && !r.upiId().isBlank() ? r.upiId().trim() : null);
+		pg.setUpiName(r.upiName() != null && !r.upiName().isBlank() ? r.upiName().trim() : null);
+		pg.setDescription(r.description());
+		pg.setAmenities(r.amenities());
+		pg.setStartingPrice(r.startingPrice());
 		pg.setLicenseKey(UUID.randomUUID().toString());
 		pg.setLicenseStart(LocalDateTime.now());
 		pg.setLicenseExpiry(LocalDateTime.now().plusMonths(1));
@@ -114,12 +138,45 @@ public class PgService {
 		pg.setLicenseExpiry(base.plusMonths(months));
 	}
 
+	public PgResponse getProfile(Long id) {
+		return toResponse(get(id));
+	}
+
+	@Transactional
+	public PgResponse updateProfile(Long id, UpdatePgProfileRequest req) {
+		Pg pg = get(id);
+		pg.setName(req.name().trim());
+		if (req.ownerName() != null) pg.setOwnerName(req.ownerName().trim());
+		if (req.mobile() != null) pg.setMobile(req.mobile().trim());
+		if (req.email() != null) pg.setEmail(req.email().trim());
+		if (req.address() != null) pg.setAddress(req.address().trim());
+		if (req.city() != null) pg.setCity(req.city().trim());
+		if (req.state() != null) pg.setState(req.state().trim());
+		if (req.totalFloors() != null && req.totalFloors() > 0) pg.setTotalFloors(req.totalFloors());
+		if (req.stayType() != null && !req.stayType().isBlank()) pg.setStayType(req.stayType().trim().toUpperCase());
+		if (req.unitLabel() != null && !req.unitLabel().isBlank()) pg.setUnitLabel(req.unitLabel().trim());
+		if (req.locationUrl() != null) pg.setLocationUrl(req.locationUrl().trim());
+		if (req.genderType() != null && !req.genderType().isBlank()) pg.setGenderType(req.genderType().trim());
+		if (req.upiId() != null) pg.setUpiId(req.upiId().trim());
+		if (req.upiName() != null) pg.setUpiName(req.upiName().trim());
+		if (req.description() != null) pg.setDescription(req.description().trim());
+		if (req.amenities() != null) pg.setAmenities(req.amenities().trim());
+		if (req.startingPrice() != null) pg.setStartingPrice(req.startingPrice());
+		return toResponse(pgs.save(pg));
+	}
+
 	private Pg get(Long id) {
 		return pgs.findById(id).orElseThrow(() -> new NotFoundException("PG not found"));
 	}
 
 	private PgResponse toResponse(Pg p) {
 		return new PgResponse(p.getId(), p.getName(), p.getOwnerName(), p.getMobile(), p.getEmail(), p.getAddress(),
-				p.getCity(), p.getState(), p.getPlan(), p.getLicenseExpiry(), p.isActive());
+				p.getCity(), p.getState(), p.getPlan(), p.getTotalFloors(),
+				p.getStayType() != null ? p.getStayType() : "PG",
+				p.getUnitLabel() != null ? p.getUnitLabel() : "Room",
+				p.getLocationUrl(),
+				p.getGenderType(), p.getUpiId(),
+				p.getUpiName(), p.getDescription(), p.getAmenities(), p.getStartingPrice(), p.getLicenseExpiry(),
+				p.isActive());
 	}
 }

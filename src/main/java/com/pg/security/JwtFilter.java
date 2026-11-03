@@ -69,9 +69,9 @@ public class JwtFilter extends OncePerRequestFilter {
 		if (user == null || user.getStatus() != Status.ACTIVE || user.getRole() != data.role()) {
 			return;
 		}
-		if (user.getRole() != Role.SUPER_ADMIN) {
+		if (user.getRole() != Role.SUPER_ADMIN && user.getPgId() != null) {
 			// Never trust a pgId from the token over the user's own row.
-			if (user.getPgId() == null || !user.getPgId().equals(data.pgId())) {
+			if (!user.getPgId().equals(data.pgId())) {
 				return;
 			}
 			Pg pg = pgs.findById(user.getPgId()).orElse(null);

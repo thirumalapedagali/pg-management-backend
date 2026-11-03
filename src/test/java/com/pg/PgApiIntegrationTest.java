@@ -93,11 +93,21 @@ class PgApiIntegrationTest {
 		assertThat(call("POST", "/api/residents", a, "{\"name\":\"Ravi\",\"roomId\":" + roomId + "}").status())
 				.as("room is full").isEqualTo(400);
 
-		// --- tenant isolation ---
+		// --- tenant isolation & global resident uniqueness by mobile ---
 		assertThat(call("GET", "/api/rooms", b, null).body().size()).isZero();
 		assertThat(call("GET", "/api/residents/" + residentId, b, null).status()).isEqualTo(404);
 		assertThat(call("POST", "/api/residents", b, "{\"name\":\"X\",\"roomId\":" + roomId + "}").status())
 				.as("cannot use another PG's room").isEqualTo(400);
+
+		Res roomB = call("POST", "/api/rooms", b, "{\"number\":\"201\",\"capacity\":2,\"rent\":7000}");
+		assertThat(roomB.status()).isEqualTo(200);
+		long roomBId = roomB.body().get("id").asLong();
+
+		// Resident Asha (9876543210) is already active in PG A, cannot be allocated in PG B or anywhere else
+		assertThat(call("POST", "/api/residents", b,
+				"{\"name\":\"Asha\",\"phone\":\"9876543210\",\"roomId\":" + roomBId + "}").status())
+				.as("resident phone must be unique across all PGs").isEqualTo(400);
+
 		assertThat(call("POST", "/api/payments", b, "{\"residentId\":" + residentId + ",\"amount\":10}").status())
 				.isEqualTo(400);
 
@@ -108,6 +118,19 @@ class PgApiIntegrationTest {
 				.isEqualTo(200);
 		assertThat(call("GET", "/api/residents/" + residentId, a, null).body().get("due").decimalValue().intValue())
 				.isEqualTo(3000);
+
+		// --- move resident to another room ---
+		Res room2 = call("POST", "/api/rooms", a, "{\"number\":\"102\",\"capacity\":1,\"rent\":6000}");
+		assertThat(room2.status()).isEqualTo(200);
+		long room2Id = room2.body().get("id").asLong();
+
+		Res moveRes = call("POST", "/api/residents/" + residentId + "/move", a, "{\"roomId\":" + room2Id + "}");
+		assertThat(moveRes.status()).isEqualTo(200);
+		assertThat(moveRes.body().get("roomNumber").asString()).isEqualTo("102");
+
+		// Room 101 should now be vacant and accept a new resident
+		Res newResInRoom1 = call("POST", "/api/residents", a, "{\"name\":\"Ravi\",\"roomId\":" + roomId + "}");
+		assertThat(newResInRoom1.status()).isEqualTo(200);
 
 		// --- expenses ---
 		assertThat(call("POST", "/api/expenses", a,

@@ -33,6 +33,7 @@ import io.jsonwebtoken.JwtException;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 /**
@@ -61,6 +62,13 @@ public class AuthController {
 	public record LoginRequest(@NotBlank String username, @NotBlank String password) {
 	}
 
+	public record RegisterRequest(
+			@NotBlank @Size(max = 120) String name,
+			@NotBlank @Pattern(regexp = "\\d{10,15}", message = "must be 10-15 digits") String mobile,
+			@NotBlank @Size(min = 6, max = 100) String password,
+			String email) {
+	}
+
 	public record SelectPgRequest(@NotNull Long pgId) {
 	}
 
@@ -71,7 +79,7 @@ public class AuthController {
 	}
 
 	public record LoginResponse(String token, Role role, Long userId, String username, Long pgId, String pgName,
-			Long residentId, boolean requiresPgSelection, List<PgOption> pgs, boolean mustChangePassword) {
+			Integer totalFloors, Long residentId, boolean requiresPgSelection, List<PgOption> pgs, boolean mustChangePassword) {
 	}
 
 	@PostMapping("/login")
@@ -88,23 +96,54 @@ public class AuthController {
 		if (user.getRole() == Role.SUPER_ADMIN) {
 			List<PgOption> options = pgs.findAll().stream().map(p -> new PgOption(p.getId(), p.getName())).toList();
 			return new LoginResponse(jwt.issue(user, null), user.getRole(), user.getId(), user.getUsername(), null, null,
-					null, true, options, user.isMustChangePassword());
+					null, null, true, options, user.isMustChangePassword());
+		}
+		if (user.getRole() == Role.RESIDENT && user.getPgId() == null) {
+			return new LoginResponse(jwt.issue(user, null), user.getRole(), user.getId(), user.getUsername(),
+					null, null, null, null, false, List.of(), user.isMustChangePassword());
 		}
 		Pg pg = requireValidPg(user);
 		return new LoginResponse(jwt.issue(user, pg.getId()), user.getRole(), user.getId(), user.getUsername(),
-				pg.getId(), pg.getName(), user.getResidentId(), false, List.of(), user.isMustChangePassword());
+				pg.getId(), pg.getName(), pg.getTotalFloors(), user.getResidentId(), false, List.of(), user.isMustChangePassword());
 	}
 
-	/** Super admin picks which PG to work in; returns a PG-scoped token. */
+	@PostMapping("/register")
+	@Transactional
+	public LoginResponse register(@Valid @RequestBody RegisterRequest req) {
+		String mobile = req.mobile().trim();
+		if (users.existsByMobile(mobile) || users.existsByUsername(mobile)) {
+			throw new BadRequestException("An account with mobile number " + mobile + " already exists. Please sign in.");
+		}
+		UserEntity user = new UserEntity();
+		user.setUsername(mobile);
+		user.setMobile(mobile);
+		user.setEmail(req.email() != null && !req.email().isBlank() ? req.email().trim() : null);
+		user.setPassword(encoder.encode(req.password()));
+		user.setRole(Role.RESIDENT);
+		user.setStatus(Status.ACTIVE);
+		user.setMustChangePassword(false);
+		user.setLastLoginAt(LocalDateTime.now());
+		user = users.save(user);
+
+		return new LoginResponse(jwt.issue(user, null), user.getRole(), user.getId(), user.getUsername(),
+				null, null, null, null, false, List.of(), false);
+	}
+
+	/** Super admin or owner picks which PG to work in; returns a PG-scoped token. */
 	@PostMapping("/select-pg")
+	@Transactional
 	public LoginResponse selectPg(@Valid @RequestBody SelectPgRequest req, Authentication auth) {
 		UserEntity user = currentUser(auth);
-		if (user.getRole() != Role.SUPER_ADMIN) {
-			throw new ForbiddenException("Only a super admin can select a PG");
+		if (user.getRole() != Role.SUPER_ADMIN && user.getRole() != Role.OWNER) {
+			throw new ForbiddenException("Only an admin or owner can select a PG");
 		}
 		Pg pg = pgs.findById(req.pgId()).orElseThrow(() -> new NotFoundException("PG not found"));
+		if (user.getRole() == Role.OWNER) {
+			user.setPgId(pg.getId());
+			users.save(user);
+		}
 		return new LoginResponse(jwt.issue(user, pg.getId()), user.getRole(), user.getId(), user.getUsername(),
-				pg.getId(), pg.getName(), null, false, List.of(), user.isMustChangePassword());
+				pg.getId(), pg.getName(), pg.getTotalFloors(), user.getResidentId(), false, List.of(), user.isMustChangePassword());
 	}
 
 	/**

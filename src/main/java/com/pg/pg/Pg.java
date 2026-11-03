@@ -34,6 +34,36 @@ public class Pg {
 	private String state;
 
 	private String plan;
+	@Column(name = "total_floors", nullable = false)
+	private Integer totalFloors = 3;
+
+	@Column(name = "stay_type", length = 40)
+	private String stayType = "PG";
+
+	@Column(name = "unit_label", length = 40)
+	private String unitLabel = "Room";
+
+	@Column(name = "location_url", length = 1000)
+	private String locationUrl;
+
+	@Column(length = 2000)
+	private String description;
+
+	@Column(length = 1500)
+	private String amenities;
+
+	@Column(name = "starting_price", precision = 12, scale = 2)
+	private java.math.BigDecimal startingPrice;
+
+	@Column(name = "gender_type", length = 30)
+	private String genderType;
+
+	@Column(name = "upi_id", length = 100)
+	private String upiId;
+
+	@Column(name = "upi_name", length = 150)
+	private String upiName;
+
 	@Column(unique = true)
 	private String licenseKey;
 	private LocalDateTime licenseStart;

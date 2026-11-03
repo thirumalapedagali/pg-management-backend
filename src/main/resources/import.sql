@@ -1,0 +1,2 @@
+INSERT INTO app_users (username,email,mobile,password,user_role,user_status,created_at,pg_id,must_change_password) VALUES ('admin','user1@gmail.com','8000000001','$2a$12$PglICIFlJWV.FtYFFJAjkeWPvbB6jpxWSXdcONNN4mZJr3MkLnLjG','SUPER_ADMIN','ACTIVE',NOW(),null,false);
+INSERT INTO pgs (name,owner_name,mobile,email,address,city,state,license_key,plan,license_start,license_expiry,total_floors,active) VALUES ('My PG','Ramesh Kumar','9876543210','agro.main@gmail.com','Market Road','Hindupur','Andhra Pradesh','PG-001','PRO','2024-04-01','2025-03-31',4,true);

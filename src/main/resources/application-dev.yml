@@ -10,6 +10,8 @@ spring:
       ddl-auto: create-drop
 
 app:
+  crypto:
+    secret: dev-only-crypto-secret-key-32chars
   jwt:
     secret: dev-only-secret-dev-only-secret-dev-only-1234
   bootstrap-admin:

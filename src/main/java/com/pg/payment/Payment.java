@@ -34,4 +34,13 @@ public class Payment extends BaseEntity {
 
 	@Column(nullable = false)
 	private LocalDate date;
+
+	@Column(length = 30)
+	private String mode = "UPI";
+
+	@Column(name = "transaction_ref", length = 100)
+	private String transactionRef;
+
+	@Column(length = 255)
+	private String notes;
 }

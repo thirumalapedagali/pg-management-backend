@@ -19,4 +19,8 @@ public class AppClock {
 	public LocalDate today() {
 		return LocalDate.now(zone);
 	}
+
+	public java.time.LocalDateTime now() {
+		return java.time.LocalDateTime.now(zone);
+	}
 }

@@ -30,6 +30,8 @@ logging:
 
 app:
   timezone: ${APP_TIMEZONE:Asia/Kolkata}
+  crypto:
+    secret: ${APP_CRYPTO_SECRET:mypg-secret-encryption-key-32chars}
   jwt:
     # Required, >= 32 bytes. There is intentionally no default outside the "dev" profile. //${JWT_SECRET:}
     secret: MY_SUPER_SECRET_JWT_KEY_32_CHAR_MINIMUM

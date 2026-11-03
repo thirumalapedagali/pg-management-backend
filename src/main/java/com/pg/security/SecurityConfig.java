@@ -43,17 +43,20 @@ public class SecurityConfig {
 				.authorizeHttpRequests(auth -> auth
 						.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 						.requestMatchers("/actuator/health").permitAll()
-						// Public: login and refresh (refresh validates its own token).
-						.requestMatchers("/api/auth/login", "/api/auth/refresh").permitAll()
+						// Public: login, registration, refresh, and public PG & room exploration.
+						.requestMatchers("/api/auth/login", "/api/auth/register", "/api/auth/refresh").permitAll()
+						.requestMatchers("/api/public/**").permitAll()
 						.requestMatchers("/api/auth/**").authenticated()
 						.requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
 						.requestMatchers("/api/users/**").hasAnyRole("SUPER_ADMIN", "OWNER")
 						.requestMatchers("/api/me/**").hasRole("RESIDENT")
-						// Residents may only look at room availability.
-						.requestMatchers(HttpMethod.GET, "/api/rooms", "/api/rooms/**")
+						// Residents may explore PGs and look at room availability.
+						.requestMatchers(HttpMethod.GET, "/api/rooms", "/api/rooms/**", "/api/explore/**")
 						.hasAnyRole("SUPER_ADMIN", "OWNER", "MANAGER", "RESIDENT")
 						.requestMatchers("/api/rooms/**", "/api/residents/**", "/api/payments/**",
-								"/api/expenses/**", "/api/master/**", "/api/dashboard/**")
+								"/api/expenses/**", "/api/master/**", "/api/dashboard/**",
+								"/api/notification-config/**", "/api/notifications/**",
+								"/api/booking-requests/**", "/api/pg/**")
 						.hasAnyRole(STAFF)
 						.anyRequest().denyAll())
 				.addFilterBefore(new JwtFilter(jwtService, users, pgs), UsernamePasswordAuthenticationFilter.class);

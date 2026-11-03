@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import com.pg.pg.PgService.PgRequest;
 import com.pg.pg.PgService.PgResponse;
+import com.pg.pg.PgService.UpdatePgProfileRequest;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -37,6 +38,16 @@ public class AdminPgController {
 	@GetMapping
 	public List<PgResponse> list() {
 		return service.list();
+	}
+
+	@GetMapping("/{id}")
+	public PgResponse get(@PathVariable Long id) {
+		return service.getProfile(id);
+	}
+
+	@PutMapping("/{id}")
+	public PgResponse update(@PathVariable Long id, @Valid @RequestBody UpdatePgProfileRequest request) {
+		return service.updateProfile(id, request);
 	}
 
 	@PutMapping("/{id}/status")

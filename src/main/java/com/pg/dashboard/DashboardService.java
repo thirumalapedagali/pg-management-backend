@@ -20,6 +20,8 @@ import com.pg.payment.PaymentRepository;
 import com.pg.resident.ResidentService;
 import com.pg.resident.ResidentService.ResidentResponse;
 import com.pg.resident.ResidentRepository;
+import com.pg.room.Bed;
+import com.pg.room.BedRepository;
 import com.pg.room.Room;
 import com.pg.room.RoomRepository;
 import com.pg.tenant.TenantContext;
@@ -36,17 +38,21 @@ public class DashboardService {
 
 	public record Summary(PeriodTotals collections, PeriodTotals expenses, PeriodTotals net, int rooms, int beds,
 			int occupied, int vacant, int residents, BigDecimal totalDue, List<MonthPoint> months,
-			List<DueItem> pendingDues) {
+			List<DueItem> pendingDues, int checkInsToday, int checkInsMonth) {
 	}
 
-	public record TodayPayment(Long id, Long residentId, String residentName, BigDecimal amount) {
+	public record TodayCheckIn(Long residentId, String name, String roomNumber, String bedNumber) {
+	}
+
+	public record TodayPayment(Long id, Long residentId, String residentName, String roomNumber, String bedNumber,
+			BigDecimal amount) {
 	}
 
 	public record TodayExpense(Long id, String title, String category, BigDecimal amount) {
 	}
 
 	public record Today(LocalDate date, BigDecimal collected, BigDecimal spent, BigDecimal net,
-			List<TodayPayment> payments, List<TodayExpense> expenses) {
+			List<TodayPayment> payments, List<TodayExpense> expenses, List<TodayCheckIn> checkIns) {
 	}
 
 	private final PaymentRepository payments;
@@ -54,10 +60,12 @@ public class DashboardService {
 	private final RoomRepository rooms;
 	private final ResidentRepository residents;
 	private final ResidentService residentService;
+	private final BedRepository beds;
 	private final AppClock clock;
 
 	public DashboardService(PaymentRepository payments, ExpenseRepository expenses, RoomRepository rooms,
-			ResidentRepository residents, ResidentService residentService, AppClock clock) {
+			ResidentRepository residents, ResidentService residentService, BedRepository beds, AppClock clock) {
+		this.beds = beds;
 		this.payments = payments;
 		this.expenses = expenses;
 		this.rooms = rooms;
@@ -94,24 +102,42 @@ public class DashboardService {
 					PeriodTotals.nz(expenses.sumBetween(pgId, from, to))));
 		}
 
+		YearMonth thisMonth = YearMonth.from(today);
+		List<LocalDate> joinDates = residents.findByPgIdOrderByName(pgId).stream().map(r -> r.getJoinedOn())
+				.filter(d -> d != null).toList();
+		int checkInsToday = (int) joinDates.stream().filter(today::equals).count();
+		int checkInsMonth = (int) joinDates.stream().filter(d -> YearMonth.from(d).equals(thisMonth)).count();
+
 		return new Summary(collections, spent, collections.minus(spent), roomList.size(), beds, occupied,
-				Math.max(0, beds - occupied), occupied, totalDue, months, pending);
+				Math.max(0, beds - occupied), occupied, totalDue, months, pending, checkInsToday, checkInsMonth);
 	}
 
 	public Today today() {
 		Long pgId = TenantContext.requirePgId();
 		LocalDate today = clock.today();
-		Map<Long, String> names = residents.findByPgIdOrderByName(pgId).stream()
-				.collect(Collectors.toMap(r -> r.getId(), r -> r.getName(), (a, b) -> a));
+		Map<Long, com.pg.resident.Resident> byId = residents.findByPgIdOrderByName(pgId).stream()
+				.collect(Collectors.toMap(r -> r.getId(), Function.identity(), (a, b) -> a));
+		Map<Long, String> roomNumbers = rooms.findByPgIdOrderByNumber(pgId).stream()
+				.collect(Collectors.toMap(Room::getId, Room::getNumber, (a, b) -> a));
+		Map<Long, String> bedNumbers = beds.findByPgIdOrderByBedNumber(pgId).stream()
+				.collect(Collectors.toMap(Bed::getId, Bed::getBedNumber, (a, b) -> a));
 		List<TodayPayment> pay = payments.findByPgIdAndDateBetweenOrderByDateDescIdDesc(pgId, today, today).stream()
-				.map(p -> new TodayPayment(p.getId(), p.getResidentId(), names.getOrDefault(p.getResidentId(), "Removed resident"),
-						p.getAmount()))
+				.map(p -> {
+					com.pg.resident.Resident r = byId.get(p.getResidentId());
+					return new TodayPayment(p.getId(), p.getResidentId(), r == null ? "Removed resident" : r.getName(),
+							r == null ? null : roomNumbers.get(r.getRoomId()),
+							r == null || r.getBedId() == null ? null : bedNumbers.get(r.getBedId()), p.getAmount());
+				})
 				.toList();
 		List<TodayExpense> exp = expenses.findAll((root, q, cb) -> cb.and(cb.equal(root.get("pgId"), pgId),
 				cb.equal(root.get("date"), today)), PageRequest.of(0, 200, org.springframework.data.domain.Sort.by("id").descending()))
 				.stream().map(e -> new TodayExpense(e.getId(), e.getTitle(), e.getCategory(), e.getAmount())).toList();
 		BigDecimal collected = pay.stream().map(TodayPayment::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
 		BigDecimal spent = exp.stream().map(TodayExpense::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
-		return new Today(today, collected, spent, collected.subtract(spent), pay, exp);
+		List<TodayCheckIn> checkIns = byId.values().stream().filter(r -> today.equals(r.getJoinedOn()))
+				.map(r -> new TodayCheckIn(r.getId(), r.getName(), roomNumbers.get(r.getRoomId()),
+						r.getBedId() == null ? null : bedNumbers.get(r.getBedId())))
+				.toList();
+		return new Today(today, collected, spent, collected.subtract(spent), pay, exp, checkIns);
 	}
 }
