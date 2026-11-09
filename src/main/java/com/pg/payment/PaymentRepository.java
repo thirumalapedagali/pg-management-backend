@@ -28,6 +28,10 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 	@Query("select coalesce(sum(p.amount), 0) from Payment p where p.pgId = :pgId and p.date between :from and :to")
 	BigDecimal sumBetween(@Param("pgId") Long pgId, @Param("from") LocalDate from, @Param("to") LocalDate to);
 
+	/** Per-day totals in a range, so one query can answer today / month / year / monthly-trend figures. */
+	@Query("select p.date, sum(p.amount) from Payment p where p.pgId = :pgId and p.date between :from and :to group by p.date")
+	List<Object[]> dailySums(@Param("pgId") Long pgId, @Param("from") LocalDate from, @Param("to") LocalDate to);
+
 	@Query("select p.residentId, sum(p.amount) from Payment p where p.pgId = :pgId group by p.residentId")
 	List<Object[]> sumByResident(@Param("pgId") Long pgId);
 

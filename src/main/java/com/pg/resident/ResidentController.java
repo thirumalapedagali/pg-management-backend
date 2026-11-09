@@ -33,6 +33,12 @@ public class ResidentController {
 		return service.list(status);
 	}
 
+	/** Notice-to-vacate requests waiting for the owner (dashboard badge). */
+	@GetMapping("/notice-count")
+	public java.util.Map<String, Long> noticeCount() {
+		return java.util.Map.of("pending", service.pendingNoticeCount());
+	}
+
 	@GetMapping("/{id}")
 	public ResidentResponse get(@PathVariable Long id) {
 		return service.get(id);
@@ -40,6 +46,12 @@ public class ResidentController {
 
 	@PostMapping
 	public ResidentResponse create(@Valid @RequestBody ResidentRequest req) {
+		if (req.phone() == null || req.phone().isBlank()) {
+			throw new com.pg.common.BadRequestException("Mobile number is required");
+		}
+		if (req.aadhaar() == null || req.aadhaar().isBlank()) {
+			throw new com.pg.common.BadRequestException("Aadhaar number is required");
+		}
 		return service.create(req);
 	}
 
@@ -63,6 +75,22 @@ public class ResidentController {
 			@org.springframework.web.bind.annotation.RequestParam(required = false) java.time.LocalDate checkOutDate,
 			@org.springframework.web.bind.annotation.RequestParam(required = false) java.time.LocalDateTime checkOutTime) {
 		return service.vacate(id, checkOutDate, checkOutTime);
+	}
+
+	/** Owner decision on a resident's notice to vacate. */
+	@PostMapping("/{id}/notice/approve")
+	public ResidentResponse approveNotice(@PathVariable Long id) {
+		return service.decideNotice(id, true);
+	}
+
+	@PostMapping("/{id}/notice/reject")
+	public ResidentResponse rejectNotice(@PathVariable Long id) {
+		return service.decideNotice(id, false);
+	}
+
+	@DeleteMapping("/{id}/notice")
+	public ResidentResponse cancelNotice(@PathVariable Long id) {
+		return service.cancelNotice(id);
 	}
 
 	@PostMapping("/{id}/rejoin")

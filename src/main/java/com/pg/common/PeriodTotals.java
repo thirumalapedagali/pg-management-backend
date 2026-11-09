@@ -18,6 +18,10 @@ public record PeriodTotals(BigDecimal today, BigDecimal month, BigDecimal year, 
 				nz(between.apply(today.withDayOfYear(1), today)), nz(all.get()));
 	}
 
+	public PeriodTotals plus(PeriodTotals o) {
+		return new PeriodTotals(today.add(o.today), month.add(o.month), year.add(o.year), total.add(o.total));
+	}
+
 	public PeriodTotals minus(PeriodTotals o) {
 		return new PeriodTotals(today.subtract(o.today), month.subtract(o.month), year.subtract(o.year),
 				total.subtract(o.total));

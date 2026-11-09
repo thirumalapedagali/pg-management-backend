@@ -14,6 +14,7 @@ import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
 import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
+import com.pg.push.PushService;
 import com.pg.resident.ResidentService;
 import com.pg.resident.ResidentService.ResidentRequest;
 import com.pg.resident.ResidentService.ResidentResponse;
@@ -63,7 +64,8 @@ public class BookingRequestService {
 			Long bedId,
 			BigDecimal rent,
 			BigDecimal securityDeposit,
-			LocalDate joinedOn
+			LocalDate joinedOn,
+			String aadhaar
 	) {}
 
 	public record RejectBookingRequest(
@@ -77,6 +79,7 @@ public class BookingRequestService {
 	private final BedRepository beds;
 	private final ResidentService residentService;
 	private final UserRepository users;
+	private final PushService push;
 
 	public BookingRequestService(
 			BookingRequestRepository bookingRequests,
@@ -85,7 +88,8 @@ public class BookingRequestService {
 			RoomSectionRepository sections,
 			BedRepository beds,
 			ResidentService residentService,
-			UserRepository users
+			UserRepository users,
+			PushService push
 	) {
 		this.bookingRequests = bookingRequests;
 		this.pgs = pgs;
@@ -94,6 +98,7 @@ public class BookingRequestService {
 		this.beds = beds;
 		this.residentService = residentService;
 		this.users = users;
+		this.push = push;
 	}
 
 	@Transactional
@@ -148,7 +153,14 @@ public class BookingRequestService {
 			});
 		}
 
-		return bookingRequests.save(br);
+		BookingRequest saved = bookingRequests.save(br);
+		try {
+			push.toStaff(pgId, "New Check-In Request", "A new check-in request has been received from " + name.trim() + ".");
+			push.toUserByMobile(pgId, mobile.trim(), "Check-In Request Received", "Your check-in request for " + pg.getName() + " has been received! The manager will review it soon.");
+		} catch (Exception e) {
+			log.warn("Failed to send check-in push notification: {}", e.getMessage());
+		}
+		return saved;
 	}
 
 	public List<BookingRequestResponse> list(String statusFilter) {
@@ -210,7 +222,8 @@ public class BookingRequestService {
 				null,
 				targetRent,
 				targetDeposit,
-				targetJoinedOn
+				targetJoinedOn,
+				req != null ? req.aadhaar() : null
 		);
 
 		ResidentResponse createdResident = residentService.create(residentReq);
@@ -218,6 +231,14 @@ public class BookingRequestService {
 		br.setStatus(BookingRequestStatus.APPROVED);
 		br.setResidentId(createdResident.id());
 		bookingRequests.save(br);
+
+		try {
+			Pg pg = pgs.findById(pgId).orElse(null);
+			String pgName = pg != null ? pg.getName() : "PG Management";
+			push.toResident(pgId, createdResident.id(), "Check-In Approved", "Congratulations! Your check-in request for " + pgName + " has been approved!");
+		} catch (Exception e) {
+			log.warn("Failed to send check-in approval push notification: {}", e.getMessage());
+		}
 
 		// Link existing user account (if resident registered in the mobile app)
 		try {
@@ -248,7 +269,16 @@ public class BookingRequestService {
 		if (req != null && req.reason() != null && !req.reason().isBlank()) {
 			br.setRejectionReason(req.reason().trim());
 		}
-		return toResponse(bookingRequests.save(br));
+		BookingRequest saved = bookingRequests.save(br);
+		try {
+			Pg pg = pgs.findById(pgId).orElse(null);
+			String pgName = pg != null ? pg.getName() : "PG Management";
+			String reasonText = (req != null && req.reason() != null && !req.reason().isBlank()) ? " Reason: " + req.reason().trim() : "";
+			push.toUserByMobile(pgId, br.getMobile(), "Check-In Request Update", "Your check-in request for " + pgName + " has been reviewed. Status: Rejected." + reasonText);
+		} catch (Exception e) {
+			log.warn("Failed to send check-in rejection push notification: {}", e.getMessage());
+		}
+		return toResponse(saved);
 	}
 
 	private BookingRequestResponse toResponse(BookingRequest br) {

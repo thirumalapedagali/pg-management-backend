@@ -14,6 +14,9 @@ import org.springframework.web.bind.annotation.RestController;
 import com.pg.pg.PgService.PgRequest;
 import com.pg.pg.PgService.PgResponse;
 import com.pg.pg.PgService.UpdatePgProfileRequest;
+import com.pg.user.UserEntity;
+import com.pg.user.UserRepository;
+
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
@@ -25,9 +28,13 @@ import jakarta.validation.constraints.Min;
 public class AdminPgController {
 
 	private final PgService service;
+	private final UserRepository users;
+	private final OwnerPgRepository ownerPgs;
 
-	public AdminPgController(PgService service) {
+	public AdminPgController(PgService service, UserRepository users, OwnerPgRepository ownerPgs) {
 		this.service = service;
+		this.users = users;
+		this.ownerPgs = ownerPgs;
 	}
 
 	@PostMapping
@@ -58,5 +65,23 @@ public class AdminPgController {
 	@PutMapping("/{id}/license")
 	public void license(@PathVariable Long id, @RequestParam @Min(1) @Max(120) int months) {
 		service.extendLicense(id, months);
+	}
+
+	public record PgUserItem(Long id, String username, String role, String status, String mobile, Long residentId) {
+	}
+
+	/** Everyone who can log in to this PG: its owners (incl. multi-property owners), managers and residents. */
+	@GetMapping("/{id}/users")
+	public List<PgUserItem> users(@PathVariable Long id) {
+		service.getProfile(id);
+		java.util.Set<Long> ids = new java.util.LinkedHashSet<>();
+		users.findByPgIdOrderByUsername(id).forEach(u -> ids.add(u.getId()));
+		ownerPgs.findByPgId(id).forEach(o -> ids.add(o.getUserId()));
+		return users.findAllById(ids).stream()
+				.sorted(java.util.Comparator.comparing((UserEntity u) -> u.getRole().ordinal())
+						.thenComparing(UserEntity::getUsername))
+				.map(u -> new PgUserItem(u.getId(), u.getUsername(), u.getRole().name(), u.getStatus().name(),
+						u.getMobile(), u.getResidentId()))
+				.toList();
 	}
 }

@@ -16,7 +16,7 @@ import jakarta.persistence.MappedSuperclass;
 import lombok.Getter;
 import lombok.Setter;
 
-/** Base for every tenant-owned table: PG id + audit columns. */
+/** Base for every tenant-owned table: PG id + audit columns + one optional attached file. */
 @Getter
 @Setter
 @MappedSuperclass
@@ -44,4 +44,13 @@ public abstract class BaseEntity {
 	@JsonIgnore
 	@LastModifiedBy
 	private String updatedBy;
+
+	/** Cloudinary public id of the file attached to this row (needed to delete it); null when there is none. */
+	@JsonIgnore
+	@Column(name = "attachment_id")
+	private String attachmentId;
+
+	/** HTTPS link to the attached file; null when there is none. */
+	@Column(name = "attachment_url", length = 1000)
+	private String attachmentUrl;
 }

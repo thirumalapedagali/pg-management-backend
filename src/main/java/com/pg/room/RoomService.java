@@ -1,19 +1,28 @@
 package com.pg.room;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import com.pg.billing.Billing;
 import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
+import com.pg.dashboard.DashboardCache;
 import com.pg.resident.Resident;
+import com.pg.resident.ResidentRentChange;
+import com.pg.resident.ResidentRentChangeRepository;
 import com.pg.resident.ResidentRepository;
+import com.pg.resident.ResidentStatus;
+import com.pg.resident.StayType;
 import com.pg.tenant.TenantContext;
 import com.pg.user.Role;
 
@@ -27,6 +36,13 @@ import jakarta.validation.constraints.Size;
 public class RoomService {
 
 	public record BedRequest(String bedNumber, BedType bedType, BigDecimal customRentOverride) {
+	}
+
+	public record SectionRentRequest(Long sectionId, BigDecimal rentPerBed) {
+	}
+
+	/** Either {@code rent} (room or flat with a single rate) or {@code sections} (rent per bed for each section). */
+	public record RentUpdateRequest(BigDecimal rent, List<SectionRentRequest> sections) {
 	}
 
 	public record SectionRequest(String sectionName, SharingType sharingType, Integer capacity,
@@ -50,7 +66,7 @@ public class RoomService {
 	}
 
 	public record BedResponse(Long id, String bedNumber, BedType bedType, BigDecimal rent, BedStatus status,
-			Long residentId, String residentName) {
+			Long residentId, String residentName, java.time.LocalDate availableFrom) {
 	}
 
 	public record SectionResponse(Long id, String sectionName, SharingType sharingType, int capacity,
@@ -63,7 +79,7 @@ public class RoomService {
 			RoomType roomType, AcType acType, boolean attachedBathroom, boolean balcony, GenderPolicy genderPolicy,
 			int capacity, BigDecimal rent, BigDecimal dailyRent, int occupied, int vacant,
 			List<SharingOptionResponse> sharingOptions, List<SectionResponse> sections,
-			List<String> occupants) {
+			List<String> occupants, java.time.LocalDate availableFrom) {
 	}
 
 	private final RoomRepository rooms;
@@ -71,9 +87,21 @@ public class RoomService {
 	private final BedRepository beds;
 	private final RoomSharingOptionRepository sharingOptions;
 	private final ResidentRepository residents;
+	private final ResidentRentChangeRepository rentChanges;
+	private final Billing billing;
+	private final DashboardCache cache;
+	private final com.pg.config.RoomAmenityRepository roomAmenities;
+	private final com.pg.attachment.MediaService media;
 
 	public RoomService(RoomRepository rooms, RoomSectionRepository sections, BedRepository beds,
-			RoomSharingOptionRepository sharingOptions, ResidentRepository residents) {
+			RoomSharingOptionRepository sharingOptions, ResidentRepository residents,
+			ResidentRentChangeRepository rentChanges, Billing billing, DashboardCache cache,
+			com.pg.config.RoomAmenityRepository roomAmenities, com.pg.attachment.MediaService media) {
+		this.media = media;
+		this.cache = cache;
+		this.roomAmenities = roomAmenities;
+		this.rentChanges = rentChanges;
+		this.billing = billing;
 		this.rooms = rooms;
 		this.sections = sections;
 		this.beds = beds;
@@ -81,10 +109,14 @@ public class RoomService {
 		this.residents = residents;
 	}
 
+	/** Cached per property until a room or resident changes (see CacheEvictionFilter). */
 	public List<RoomResponse> list() {
 		Long pgId = TenantContext.requirePgId();
 		boolean staff = !Role.RESIDENT.name().equals(TenantContext.getRole());
+		return cache.rooms(pgId, staff, () -> load(pgId, staff));
+	}
 
+	private List<RoomResponse> load(Long pgId, boolean staff) {
 		List<Room> roomList = rooms.findByPgIdOrderByNumber(pgId);
 		List<RoomSection> sectionList = sections.findByPgIdOrderBySectionName(pgId);
 		List<Bed> bedList = beds.findByPgIdOrderByBedNumber(pgId);
@@ -132,7 +164,7 @@ public class RoomService {
 					BigDecimal bedRent = b.getCustomRentOverride() != null ? b.getCustomRentOverride() : s.getRentPerBed();
 					return new BedResponse(b.getId(), b.getBedNumber(), b.getBedType(), bedRent, b.getStatus(),
 							staff && res != null ? res.getId() : null,
-							staff && res != null ? res.getName() : null);
+							staff && res != null ? res.getName() : null, availableFrom(res));
 				}).toList();
 
 				return new SectionResponse(s.getId(), s.getSectionName(), s.getSharingType(), s.getCapacity(),
@@ -144,9 +176,16 @@ public class RoomService {
 			int occupied = roomResidents.size();
 			int vacant = Math.max(0, totalCapacity - occupied);
 
+			java.time.LocalDate earliestAvailableFrom = sectionResponses.stream()
+					.flatMap(s -> s.beds().stream())
+					.map(BedResponse::availableFrom)
+					.filter(java.util.Objects::nonNull)
+					.min(java.time.LocalDate::compareTo)
+					.orElse(null);
+
 			return new RoomResponse(r.getId(), r.getNumber(), r.getRoomName(), r.getBuildingName(), r.getFloorName(),
 					r.getRoomType(), r.getAcType(), r.isAttachedBathroom(), r.isBalcony(), r.getGenderPolicy(),
-					totalCapacity, r.getRent(), r.getDailyRent(), occupied, vacant, sharingResponses, sectionResponses, staff ? occupantNames : null);
+					totalCapacity, r.getRent(), r.getDailyRent(), occupied, vacant, sharingResponses, sectionResponses, staff ? occupantNames : null, earliestAvailableFrom);
 		}).toList();
 	}
 
@@ -366,6 +405,124 @@ public class RoomService {
 		return getRoomResponse(room.getId());
 	}
 
+	/**
+	 * Changes the rent of a room (or of its sections). New residents get the new rent straight away. Current
+	 * monthly residents who pay the old standard rate move to the new rent from the start of their next billing
+	 * cycle, so cycles already billed are untouched. Residents on a custom rent are left alone.
+	 */
+	@Transactional
+	public RoomResponse updateRent(Long id, RentUpdateRequest req) {
+		Long pgId = TenantContext.requirePgId();
+		Room room = rooms.lockByPgIdAndId(pgId, id).orElseThrow(() -> new NotFoundException("Room not found"));
+		List<RoomSection> secList = sections.findByPgIdAndRoomIdOrderBySectionName(pgId, id);
+		List<Resident> active = residents.findByPgIdAndRoomIdAndStatusOrderByName(pgId, id, ResidentStatus.ACTIVE);
+		BigDecimal oldRoomRent = room.getRent();
+
+		boolean bySection = req.sections() != null && !req.sections().isEmpty();
+		if (!bySection && req.rent() == null) {
+			throw new BadRequestException("Enter the new rent");
+		}
+		if (!bySection && secList.size() > 1) {
+			throw new BadRequestException("This room has several sections: set the rent of each section");
+		}
+
+		// A resident without a rent of their own would silently follow the room's rent: pin it before changing it.
+		for (Resident r : active) {
+			if (r.getRentOverride() == null) {
+				r.setRentOverride(oldRoomRent);
+				residents.save(r);
+			}
+		}
+
+		if (bySection) {
+			Map<Long, RoomSection> byId = secList.stream().collect(Collectors.toMap(RoomSection::getId, s -> s));
+			for (SectionRentRequest sr : req.sections()) {
+				RoomSection sec = sr.sectionId() == null ? null : byId.get(sr.sectionId());
+				if (sec == null) {
+					throw new BadRequestException("Section not found in this room");
+				}
+				BigDecimal newRent = requireRent(sr.rentPerBed());
+				BigDecimal oldRent = sec.getRentPerBed();
+				if (oldRent.compareTo(newRent) == 0) {
+					continue;
+				}
+				sec.setRentPerBed(newRent);
+				sections.save(sec);
+				setOptionRent(pgId, id, o -> o.getSharingType() == sec.getSharingType() && o.getCapacity() == sec.getCapacity(),
+						newRent);
+				scheduleForResidents(active.stream().filter(r -> sec.getId().equals(r.getSectionId())).toList(),
+						oldRent, newRent);
+			}
+			int totalBeds = secList.stream().mapToInt(RoomSection::getCapacity).sum();
+			if (totalBeds > 0) {
+				BigDecimal total = secList.stream()
+						.map(s -> s.getRentPerBed().multiply(BigDecimal.valueOf(s.getCapacity())))
+						.reduce(BigDecimal.ZERO, BigDecimal::add);
+				room.setRent(total.divide(BigDecimal.valueOf(totalBeds), 2, RoundingMode.HALF_UP));
+			}
+		} else {
+			BigDecimal newRent = requireRent(req.rent());
+			RoomSection sec = secList.isEmpty() ? null : secList.get(0);
+			BigDecimal oldRent = sec != null ? sec.getRentPerBed() : oldRoomRent;
+			if (oldRent.compareTo(newRent) != 0 || oldRoomRent.compareTo(newRent) != 0) {
+				room.setRent(newRent);
+				if (sec != null) {
+					sec.setRentPerBed(newRent);
+					sections.save(sec);
+				}
+				setOptionRent(pgId, id, o -> true, newRent);
+				scheduleForResidents(active, oldRent, newRent);
+			}
+		}
+		rooms.save(room);
+		return getRoomResponse(id);
+	}
+
+	private static BigDecimal requireRent(BigDecimal rent) {
+		if (rent == null || rent.signum() < 0) {
+			throw new BadRequestException("Rent must be zero or more");
+		}
+		return rent;
+	}
+
+	private void setOptionRent(Long pgId, Long roomId, Predicate<RoomSharingOption> match, BigDecimal rent) {
+		for (RoomSharingOption opt : sharingOptions.findByPgIdAndRoomIdOrderByCapacity(pgId, roomId)) {
+			if (match.test(opt)) {
+				opt.setRentPerBed(rent);
+				sharingOptions.save(opt);
+			}
+		}
+	}
+
+	/** Schedules {@code newRent} from each resident's next billing cycle, if they are paying {@code oldRent}. */
+	private void scheduleForResidents(List<Resident> affected, BigDecimal oldRent, BigDecimal newRent) {
+		for (Resident r : affected) {
+			if (r.getStayType() != StayType.MONTHLY || r.getJoinedOn() == null) {
+				continue;
+			}
+			LocalDate start = billing.nextCycleStart(r);
+			List<ResidentRentChange> existing = billing.changesFor(r);
+			if (Billing.rentForCycle(r.getRentOverride(), existing, start).compareTo(oldRent) != 0) {
+				continue; // negotiated / custom rent: not tied to the room's rate
+			}
+			List<ResidentRentChange> keep = new ArrayList<>();
+			for (ResidentRentChange c : existing) {
+				if (c.getEffectiveFrom().isBefore(start)) {
+					keep.add(c);
+				} else {
+					rentChanges.delete(c);
+				}
+			}
+			if (Billing.rentForCycle(r.getRentOverride(), keep, start).compareTo(newRent) != 0) {
+				ResidentRentChange change = new ResidentRentChange();
+				change.setResidentId(r.getId());
+				change.setEffectiveFrom(start);
+				change.setRent(newRent);
+				rentChanges.save(change);
+			}
+		}
+	}
+
 	@Transactional
 	public void delete(Long id) {
 		Long pgId = TenantContext.requirePgId();
@@ -376,7 +533,9 @@ public class RoomService {
 		beds.deleteByPgIdAndRoomId(pgId, id);
 		sections.deleteByPgIdAndRoomId(pgId, id);
 		sharingOptions.deleteByPgIdAndRoomId(pgId, id);
+		roomAmenities.deleteByPgIdAndRoomId(pgId, id);
 		rooms.delete(room);
+		media.removeAll("ROOM", pgId, id);
 	}
 
 	private void applyRoomDetails(Room room, RoomRequest req, String number) {
@@ -414,6 +573,11 @@ public class RoomService {
 		};
 	}
 
+	/** Date an occupied bed frees up, once the owner has approved the occupant's notice. */
+	private static java.time.LocalDate availableFrom(Resident res) {
+		return res != null && res.getNoticeStatus() == com.pg.resident.NoticeStatus.APPROVED ? res.getVacateOn() : null;
+	}
+
 	private RoomResponse getRoomResponse(Long roomId) {
 		Long pgId = TenantContext.requirePgId();
 		Room r = rooms.findByPgIdAndId(pgId, roomId).orElseThrow();
@@ -442,7 +606,7 @@ public class RoomService {
 				Resident res = b.getResidentId() != null ? residentById.get(b.getResidentId()) : null;
 				BigDecimal bedRent = b.getCustomRentOverride() != null ? b.getCustomRentOverride() : s.getRentPerBed();
 				return new BedResponse(b.getId(), b.getBedNumber(), b.getBedType(), bedRent, b.getStatus(),
-						res != null ? res.getId() : null, res != null ? res.getName() : null);
+						res != null ? res.getId() : null, res != null ? res.getName() : null, availableFrom(res));
 			}).toList();
 
 			return new SectionResponse(s.getId(), s.getSectionName(), s.getSharingType(), s.getCapacity(),
@@ -453,8 +617,15 @@ public class RoomService {
 		int occupied = roomResidents.size();
 		int vacant = Math.max(0, r.getCapacity() - occupied);
 
+		java.time.LocalDate earliestAvailableFrom = secResponses.stream()
+				.flatMap(s -> s.beds().stream())
+				.map(BedResponse::availableFrom)
+				.filter(java.util.Objects::nonNull)
+				.min(java.time.LocalDate::compareTo)
+				.orElse(null);
+
 		return new RoomResponse(r.getId(), r.getNumber(), r.getRoomName(), r.getBuildingName(), r.getFloorName(),
 				r.getRoomType(), r.getAcType(), r.isAttachedBathroom(), r.isBalcony(), r.getGenderPolicy(),
-				r.getCapacity(), r.getRent(), r.getDailyRent(), occupied, vacant, sharingResponses, secResponses, occupantNames);
+				r.getCapacity(), r.getRent(), r.getDailyRent(), occupied, vacant, sharingResponses, secResponses, occupantNames, earliestAvailableFrom);
 	}
 }

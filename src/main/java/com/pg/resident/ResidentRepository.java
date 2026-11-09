@@ -13,6 +13,13 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
 
 	List<Resident> findByPgIdAndStatusOrderByName(Long pgId, ResidentStatus status);
 
+	long countByPgIdAndStatus(Long pgId, ResidentStatus status);
+
+	long countByPgIdAndStatusAndNoticeStatus(Long pgId, ResidentStatus status, NoticeStatus noticeStatus);
+
+	@Query("select r.joinedOn from Resident r where r.pgId = :pgId and r.joinedOn >= :from")
+	List<java.time.LocalDate> joinDatesSince(@Param("pgId") Long pgId, @Param("from") java.time.LocalDate from);
+
 	List<Resident> findByPgIdAndRoomIdOrderByName(Long pgId, Long roomId);
 
 	List<Resident> findByPgIdAndRoomIdAndStatusOrderByName(Long pgId, Long roomId, ResidentStatus status);

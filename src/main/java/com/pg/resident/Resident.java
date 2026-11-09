@@ -80,4 +80,19 @@ public class Resident extends BaseEntity {
 	@Enumerated(EnumType.STRING)
 	@Column(name = "status", length = 20, nullable = false)
 	private ResidentStatus status = ResidentStatus.ACTIVE;
+
+	/** Notice to vacate: null when the resident has not given one. */
+	@Enumerated(EnumType.STRING)
+	@Column(name = "notice_status", length = 20)
+	private NoticeStatus noticeStatus;
+
+	@Column(name = "notice_given_on")
+	private LocalDate noticeGivenOn;
+
+	/** The last day the resident wants to stay; the bed is available from this date once approved. */
+	@Column(name = "vacate_on")
+	private LocalDate vacateOn;
+
+	@Column(name = "notice_reason", length = 300)
+	private String noticeReason;
 }

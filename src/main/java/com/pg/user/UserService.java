@@ -25,13 +25,13 @@ public class UserService {
 
 	public record CreateUserRequest(@NotBlank @Size(max = 60) String username, String email,
 			@NotBlank @Pattern(regexp = "\\d{10,15}", message = "must be 10-15 digits") String mobile,
-			@NotBlank @Size(min = 8, max = 100) String password, @NotNull Role role, Long residentId) {
+			@NotBlank @Size(min = 4, max = 100) String password, @NotNull Role role, Long residentId) {
 	}
 
 	/** All fields optional; only supplied ones change. */
 	public record UpdateUserRequest(String email,
 			@Pattern(regexp = "\\d{10,15}", message = "must be 10-15 digits") String mobile, Role role, Status status,
-			@Size(min = 8, max = 100) String newPassword) {
+			@Size(min = 4, max = 100) String newPassword) {
 	}
 
 	public record UserResponse(Long id, String username, String email, String mobile, Role role, Status status,

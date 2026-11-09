@@ -10,6 +10,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 /** Error body shape: {"code": "...", "message": "..."} */
 @RestControllerAdvice
@@ -39,6 +40,11 @@ public class GlobalExceptionHandler {
 		return body(HttpStatus.FORBIDDEN, "FORBIDDEN", ex.getMessage());
 	}
 
+	@ExceptionHandler(ServiceUnavailableException.class)
+	public ResponseEntity<Map<String, String>> unavailable(ServiceUnavailableException ex) {
+		return body(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE", ex.getMessage());
+	}
+
 	@ExceptionHandler(LicenseExpiredException.class)
 	public ResponseEntity<Map<String, String>> licenseExpired(LicenseExpiredException ex) {
 		return body(HttpStatus.PAYMENT_REQUIRED, "LICENSE_EXPIRED", ex.getMessage());
@@ -54,6 +60,11 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler({ HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class })
 	public ResponseEntity<Map<String, String>> unreadable(Exception ex) {
 		return body(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "Malformed request");
+	}
+
+	@ExceptionHandler(MaxUploadSizeExceededException.class)
+	public ResponseEntity<Map<String, String>> tooLarge(MaxUploadSizeExceededException ex) {
+		return body(HttpStatus.BAD_REQUEST, "BAD_REQUEST", "The file is larger than 10 MB");
 	}
 
 	@ExceptionHandler(DataIntegrityViolationException.class)

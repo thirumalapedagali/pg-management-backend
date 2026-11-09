@@ -18,6 +18,9 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import com.pg.dashboard.CacheEvictionFilter;
+import com.pg.dashboard.DashboardCache;
+import com.pg.pg.OwnerPgAccess;
 import com.pg.pg.PgRepository;
 import com.pg.user.UserRepository;
 
@@ -28,7 +31,7 @@ public class SecurityConfig {
 
 	@Bean
 	public SecurityFilterChain filterChain(HttpSecurity http, JwtService jwtService, UserRepository users,
-			PgRepository pgs) throws Exception {
+			PgRepository pgs, OwnerPgAccess ownerAccess, DashboardCache dashboardCache) throws Exception {
 		http.csrf(csrf -> csrf.disable()).cors(Customizer -> { })
 				.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 				.exceptionHandling(e -> e.authenticationEntryPoint((req, res, ex) -> {
@@ -43,23 +46,36 @@ public class SecurityConfig {
 				.authorizeHttpRequests(auth -> auth
 						.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 						.requestMatchers("/actuator/health").permitAll()
+						// Error dispatches (404, 500...) must keep their status; otherwise the app sees them as 401 and signs the user out.
+						.requestMatchers("/error").permitAll()
 						// Public: login, registration, refresh, and public PG & room exploration.
-						.requestMatchers("/api/auth/login", "/api/auth/register", "/api/auth/refresh").permitAll()
+						.requestMatchers("/api/auth/login", "/api/auth/refresh").permitAll()
 						.requestMatchers("/api/public/**").permitAll()
+						// Location search: residents browse before they have an account.
+						.requestMatchers(HttpMethod.GET, "/api/stays/**", "/api/locations/**").permitAll()
 						.requestMatchers("/api/auth/**").authenticated()
+						// Dropdown options and the property-type catalog are not private; the owner sign-up form needs them.
+						.requestMatchers(HttpMethod.GET, "/api/lookups", "/api/config/**").permitAll()
+						.requestMatchers("/api/me/devices").hasAnyRole("SUPER_ADMIN", "OWNER", "MANAGER", "RESIDENT")
 						.requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
 						.requestMatchers("/api/users/**").hasAnyRole("SUPER_ADMIN", "OWNER")
 						.requestMatchers("/api/me/**").hasRole("RESIDENT")
 						// Residents may explore PGs and look at room availability.
-						.requestMatchers(HttpMethod.GET, "/api/rooms", "/api/rooms/**", "/api/explore/**")
+						.requestMatchers(HttpMethod.GET, "/api/rooms", "/api/rooms/**", "/api/explore/**",
+								"/api/announcements", "/api/support-contacts")
 						.hasAnyRole("SUPER_ADMIN", "OWNER", "MANAGER", "RESIDENT")
 						.requestMatchers("/api/rooms/**", "/api/residents/**", "/api/payments/**",
 								"/api/expenses/**", "/api/master/**", "/api/dashboard/**",
 								"/api/notification-config/**", "/api/notifications/**",
-								"/api/booking-requests/**", "/api/pg/**")
+								"/api/booking-requests/**", "/api/pg/**", "/api/announcements/**",
+								"/api/complaints/**", "/api/support-contacts/**", "/api/properties/**",
+								"/api/attachments/**", "/api/media/**")
 						.hasAnyRole(STAFF)
 						.anyRequest().denyAll())
-				.addFilterBefore(new JwtFilter(jwtService, users, pgs), UsernamePasswordAuthenticationFilter.class);
+				.addFilterBefore(new JwtFilter(jwtService, users, pgs, ownerAccess),
+						UsernamePasswordAuthenticationFilter.class)
+				// After JwtFilter, so the tenant context is still set when the request has finished.
+				.addFilterAfter(new CacheEvictionFilter(dashboardCache), JwtFilter.class);
 		return http.build();
 	}
 

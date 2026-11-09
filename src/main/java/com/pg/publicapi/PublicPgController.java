@@ -63,7 +63,11 @@ public class PublicPgController {
 			BigDecimal startingPrice,
 			int totalRooms,
 			int totalBeds,
-			int vacantBeds
+			int vacantBeds,
+			/** Occupied beds whose resident has an approved notice, and the earliest date one of them frees up. */
+			int upcomingBeds,
+			LocalDate availableFrom,
+			List<String> images
 	) {
 	}
 
@@ -72,7 +76,8 @@ public class PublicPgController {
 			String bedNumber,
 			BedType bedType,
 			BigDecimal rent,
-			BedStatus status
+			BedStatus status,
+			LocalDate availableFrom
 	) {
 	}
 
@@ -115,7 +120,8 @@ public class PublicPgController {
 			int vacantBedsCount,
 			List<PublicSharingOption> sharingOptions,
 			List<PublicSectionDetail> sections,
-			List<PublicBedDetail> allVacantBeds
+			List<PublicBedDetail> allVacantBeds,
+			List<String> images
 	) {
 	}
 
@@ -141,7 +147,8 @@ public class PublicPgController {
 			int totalRooms,
 			int totalBeds,
 			int totalVacantBeds,
-			List<PublicRoomDetail> rooms
+			List<PublicRoomDetail> rooms,
+			List<String> images
 	) {
 	}
 
@@ -179,10 +186,12 @@ public class PublicPgController {
 	private final RoomSharingOptionRepository sharingOptions;
 	private final ResidentRepository residents;
 	private final com.pg.booking.BookingRequestService bookingRequestService;
+	private final com.pg.attachment.MediaFileRepository media;
 
 	public PublicPgController(PgRepository pgs, RoomRepository rooms, RoomSectionRepository sections,
 			BedRepository beds, RoomSharingOptionRepository sharingOptions, ResidentRepository residents,
-			com.pg.booking.BookingRequestService bookingRequestService) {
+			com.pg.booking.BookingRequestService bookingRequestService, com.pg.attachment.MediaFileRepository media) {
+		this.media = media;
 		this.pgs = pgs;
 		this.rooms = rooms;
 		this.sections = sections;
@@ -200,12 +209,30 @@ public class PublicPgController {
 			allPgs = allPgs.stream().filter(p -> p.getCity() != null && p.getCity().toLowerCase().contains(q)).toList();
 		}
 
+		Map<Long, List<String>> pictures = new HashMap<>();
+		media.findByOwnerTypeAndOwnerIdInOrderById("PROPERTY", allPgs.stream().map(Pg::getId).toList())
+				.forEach(m -> pictures.computeIfAbsent(m.getOwnerId(), k -> new ArrayList<>()).add(m.getUrl()));
+
 		List<PublicPgSummaryResponse> result = new ArrayList<>();
 		for (Pg pg : allPgs) {
 			List<Room> pgRooms = rooms.findByPgIdOrderByNumber(pg.getId());
 			List<Bed> pgBeds = beds.findByPgIdOrderByBedNumber(pg.getId());
 			int totalBeds = pgBeds.size();
 			int vacantBeds = (int) pgBeds.stream().filter(b -> b.getStatus() == BedStatus.VACANT).count();
+			Map<Long, BedStatus> bedStatus = new HashMap<>();
+			pgBeds.forEach(b -> bedStatus.put(b.getId(), b.getStatus()));
+			int upcomingBeds = 0;
+			LocalDate soonest = null;
+			for (com.pg.resident.Resident res : residents.findByPgIdAndStatusOrderByName(pg.getId(), com.pg.resident.ResidentStatus.ACTIVE)) {
+				if (res.getBedId() != null && res.getNoticeStatus() == com.pg.resident.NoticeStatus.APPROVED
+						&& res.getVacateOn() != null && bedStatus.get(res.getBedId()) != null
+						&& bedStatus.get(res.getBedId()) != BedStatus.VACANT) {
+					upcomingBeds++;
+					if (soonest == null || res.getVacateOn().isBefore(soonest)) {
+						soonest = res.getVacateOn();
+					}
+				}
+			}
 
 			// Calculate lowest price from vacant beds or rooms
 			BigDecimal minRent = pg.getStartingPrice();
@@ -250,7 +277,10 @@ public class PublicPgController {
 					minRent != null ? minRent : BigDecimal.valueOf(5000),
 					pgRooms.size(),
 					totalBeds,
-					vacantBeds
+					vacantBeds,
+					upcomingBeds,
+					soonest,
+					pictures.getOrDefault(pg.getId(), List.of())
 			));
 		}
 		return result;
@@ -280,8 +310,21 @@ public class PublicPgController {
 			optionsByRoom.computeIfAbsent(opt.getRoomId(), k -> new ArrayList<>()).add(opt);
 		}
 
+		Map<Long, List<String>> roomPictures = new HashMap<>();
+		media.findByPgIdAndOwnerTypeOrderById(id, "ROOM")
+				.forEach(m -> roomPictures.computeIfAbsent(m.getOwnerId(), k -> new ArrayList<>()).add(m.getUrl()));
+		List<String> propertyPictures = media.findByOwnerTypeAndOwnerIdInOrderById("PROPERTY", List.of(id)).stream()
+				.map(com.pg.attachment.MediaFile::getUrl).toList();
+
 		int totalBeds = bedList.size();
 		int totalVacant = 0;
+		// Occupied beds whose resident has an owner-approved notice: bed id -> date it frees up.
+		Map<Long, LocalDate> freeingUp = new HashMap<>();
+		for (com.pg.resident.Resident res : residents.findByPgIdAndStatusOrderByName(id, com.pg.resident.ResidentStatus.ACTIVE)) {
+			if (res.getBedId() != null && res.getNoticeStatus() == com.pg.resident.NoticeStatus.APPROVED && res.getVacateOn() != null) {
+				freeingUp.put(res.getBedId(), res.getVacateOn());
+			}
+		}
 		List<PublicRoomDetail> roomDetails = new ArrayList<>();
 		BigDecimal minRent = pg.getStartingPrice();
 
@@ -302,13 +345,16 @@ public class PublicPgController {
 				List<Bed> secBeds = bedsBySection.getOrDefault(sec.getId(), List.of());
 				List<PublicBedDetail> vacantSecBeds = new ArrayList<>();
 				for (Bed b : secBeds) {
-					if (b.getStatus() == BedStatus.VACANT) {
+					LocalDate availableFrom = b.getStatus() == BedStatus.VACANT ? null : freeingUp.get(b.getId());
+					if (b.getStatus() == BedStatus.VACANT || availableFrom != null) {
 						BigDecimal effectiveRent = b.getCustomRentOverride() != null ? b.getCustomRentOverride()
 								: (sec.getRentPerBed() != null && sec.getRentPerBed().compareTo(BigDecimal.ZERO) > 0 ? sec.getRentPerBed() : r.getRent());
-						PublicBedDetail bedDetail = new PublicBedDetail(b.getId(), b.getBedNumber(), b.getBedType(), effectiveRent, b.getStatus());
+						PublicBedDetail bedDetail = new PublicBedDetail(b.getId(), b.getBedNumber(), b.getBedType(), effectiveRent, b.getStatus(), availableFrom);
 						vacantSecBeds.add(bedDetail);
 						allRoomVacantBeds.add(bedDetail);
-						totalVacant++;
+						if (availableFrom == null) {
+							totalVacant++;
+						}
 
 						if (minRent == null || (effectiveRent != null && effectiveRent.compareTo(BigDecimal.ZERO) > 0 && effectiveRent.compareTo(minRent) < 0)) {
 							minRent = effectiveRent;
@@ -342,10 +388,11 @@ public class PublicPgController {
 					r.getCapacity(),
 					r.getRent(),
 					r.getDailyRent(),
-					allRoomVacantBeds.size(),
+					(int) allRoomVacantBeds.stream().filter(x -> x.availableFrom() == null).count(),
 					sharingResponses,
 					sectionResponses,
-					allRoomVacantBeds
+					allRoomVacantBeds,
+					roomPictures.getOrDefault(r.getId(), List.of())
 			));
 		}
 
@@ -371,7 +418,8 @@ public class PublicPgController {
 				roomList.size(),
 				totalBeds,
 				totalVacant,
-				roomDetails
+				roomDetails,
+				propertyPictures
 		);
 	}
 

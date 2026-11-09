@@ -16,6 +16,10 @@ public interface RoomRepository extends JpaRepository<Room, Long> {
 
 	Optional<Room> findByPgIdAndId(Long pgId, Long id);
 
+	/** One row: [room count, total beds]. */
+	@Query("select count(r), coalesce(sum(r.capacity), 0) from Room r where r.pgId = :pgId")
+	List<Object[]> stats(@Param("pgId") Long pgId);
+
 	boolean existsByPgIdAndNumber(Long pgId, String number);
 
 	boolean existsByPgIdAndNumberAndIdNot(Long pgId, String number, Long id);

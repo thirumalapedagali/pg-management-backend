@@ -16,6 +16,7 @@ import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
 import com.pg.resident.Resident;
 import com.pg.resident.ResidentRepository;
+import com.pg.push.PushService;
 import com.pg.room.Bed;
 import com.pg.room.BedRepository;
 import com.pg.room.Room;
@@ -49,10 +50,13 @@ public class PaymentService {
 	private final PgRepository pgs;
 	private final Billing billing;
 	private final WhatsAppService whatsAppService;
+	private final PushService push;
 	private final AppClock clock;
 
 	public PaymentService(PaymentRepository payments, ResidentRepository residents, RoomRepository rooms,
-			BedRepository beds, PgRepository pgs, Billing billing, WhatsAppService whatsAppService, AppClock clock) {
+			BedRepository beds, PgRepository pgs, Billing billing, WhatsAppService whatsAppService, PushService push,
+			AppClock clock) {
+		this.push = push;
 		this.payments = payments;
 		this.residents = residents;
 		this.rooms = rooms;
@@ -91,6 +95,15 @@ public class PaymentService {
 		p.setNotes(req.notes());
 		Payment saved = payments.save(p);
 
+		push.toResident(pgId, req.residentId(), "Payment received",
+				"We received Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " on "+ saved.getDate() + ". Thank you!",
+				java.util.Map.of("type", "PAYMENT"));
+		try {
+			push.toStaff(pgId, "Payment Update", "Payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " recorded for " + resident.getName() + ".");
+		} catch (Exception e) {
+			log.warn("Failed to send payment push notification to staff: {}", e.getMessage());
+		}
+
 		// Send WhatsApp Payment Receipt safely
 		try {
 			Room room = rooms.findByPgIdAndId(pgId, resident.getRoomId()).orElse(null);
@@ -124,6 +137,17 @@ public class PaymentService {
 		p.setTransactionRef(req.transactionRef());
 		p.setNotes(req.notes());
 		Payment saved = payments.save(p);
+
+		try {
+			push.toResident(pgId, residentId, "Payment Submitted",
+					"Your payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " on " + saved.getDate() + " has been submitted successfully.",
+					java.util.Map.of("type", "PAYMENT"));
+			Room room = rooms.findByPgIdAndId(pgId, resident.getRoomId()).orElse(null);
+			push.toStaff(pgId, "New Payment Alert",
+					resident.getName() + " from Room " + (room != null ? room.getNumber() : "-") + " submitted a payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + ".");
+		} catch (Exception e) {
+			log.warn("Failed to send payment push notifications: {}", e.getMessage());
+		}
 
 		// Send WhatsApp Payment Receipt to resident & alert to Owner
 		try {

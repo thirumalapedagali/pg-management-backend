@@ -12,6 +12,8 @@ import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
 import com.pg.expense.ExpenseCategory;
 import com.pg.expense.ExpenseCategoryRepository;
+import com.pg.config.PropertyConfigurationService;
+import com.pg.lookup.LookupService;
 import com.pg.user.Role;
 import com.pg.user.UserEntity;
 import com.pg.user.UserRepository;
@@ -35,43 +37,69 @@ public class PgService {
 			/* First owner login for this PG */
 			@NotBlank @Size(max = 60) String ownerUsername,
 			@NotBlank @Pattern(regexp = "\\d{10,15}", message = "must be 10-15 digits") String ownerMobile,
-			@NotBlank @Size(min = 8, max = 100) String ownerPassword) {
+			@NotBlank @Size(min = 4, max = 100) String ownerPassword,
+			/* Amenity codes picked from the property type's catalog; replaces the free-text amenities when sent */
+			List<String> amenityCodes,
+			/* Where the property is (WGS84); see PgLocation */
+			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country) {
 	}
 
 	public record UpdatePgProfileRequest(@NotBlank @Size(max = 120) String name, String ownerName,
 			String mobile, String email, String address, String city, String state, Integer totalFloors,
 			String stayType, String unitLabel, String locationUrl,
 			String genderType, String upiId, String upiName, String description, String amenities,
-			java.math.BigDecimal startingPrice) {
+			java.math.BigDecimal startingPrice, List<String> amenityCodes,
+			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country,
+			@Size(max = 4000) String rules) {
 	}
 
 	public record PgResponse(Long id, String name, String ownerName, String mobile, String email, String address,
 			String city, String state, String plan, Integer totalFloors,
 			String stayType, String unitLabel, String locationUrl,
 			String genderType, String upiId, String upiName, String description, String amenities,
-			java.math.BigDecimal startingPrice, LocalDateTime licenseExpiry, boolean active) {
+			java.math.BigDecimal startingPrice, LocalDateTime licenseExpiry, boolean active,
+			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country,
+			String rules) {
 	}
 
 	private final PgRepository pgs;
 	private final UserRepository users;
 	private final ExpenseCategoryRepository categories;
 	private final PasswordEncoder encoder;
+	private final OwnerPgAccess ownerPgs;
+	private final LookupService lookups;
+	private final PropertyConfigurationService propertyConfig;
 
 	public PgService(PgRepository pgs, UserRepository users, ExpenseCategoryRepository categories,
-			PasswordEncoder encoder) {
+			PasswordEncoder encoder, OwnerPgAccess ownerPgs, LookupService lookups,
+			PropertyConfigurationService propertyConfig) {
+		this.lookups = lookups;
+		this.propertyConfig = propertyConfig;
 		this.pgs = pgs;
 		this.users = users;
 		this.categories = categories;
 		this.encoder = encoder;
+		this.ownerPgs = ownerPgs;
 	}
 
 	@Transactional
 	public PgResponse create(PgRequest r) {
+		return create(r, encoder.encode(r.ownerPassword()), true);
+	}
+
+	/** Creates the property and its first owner login from an already hashed password. */
+	@Transactional
+	public PgResponse create(PgRequest r, String passwordHash, boolean mustChangePassword) {
 		String ownerUsername = r.ownerUsername().trim();
-		if (users.existsByUsername(ownerUsername)) {
+		// An existing owner login can be given another property instead of a new account.
+		UserEntity existingOwner = users.findByUsername(ownerUsername).orElse(null);
+		if (existingOwner != null && existingOwner.getRole() != Role.OWNER) {
 			throw new BadRequestException("Username already in use: " + ownerUsername);
 		}
-		if (users.existsByMobile(r.ownerMobile())) {
+		if (existingOwner == null && users.existsByUsername(ownerUsername)) {
+			throw new BadRequestException("Username already in use: " + ownerUsername);
+		}
+		if (existingOwner == null && users.existsByMobile(r.ownerMobile())) {
 			throw new BadRequestException("Mobile already in use: " + r.ownerMobile());
 		}
 		Pg pg = new Pg();
@@ -85,7 +113,7 @@ public class PgService {
 		pg.setPlan(r.plan());
 		pg.setTotalFloors(r.totalFloors() != null && r.totalFloors() > 0 ? r.totalFloors() : 3);
 		pg.setStayType(r.stayType() != null && !r.stayType().isBlank() ? r.stayType().trim().toUpperCase() : "PG");
-		String defaultUnit = "APARTMENT".equalsIgnoreCase(r.stayType()) ? "Flat" : "HOSTEL".equalsIgnoreCase(r.stayType()) ? "Dorm" : "Room";
+		String defaultUnit = lookups.defaultUnitLabel(r.stayType());
 		pg.setUnitLabel(r.unitLabel() != null && !r.unitLabel().isBlank() ? r.unitLabel().trim() : defaultUnit);
 		pg.setLocationUrl(r.locationUrl() != null && !r.locationUrl().isBlank() ? r.locationUrl().trim() : null);
 		pg.setGenderType(r.genderType() != null && !r.genderType().isBlank() ? r.genderType().trim() : "CO_LIVING");
@@ -94,21 +122,29 @@ public class PgService {
 		pg.setDescription(r.description());
 		pg.setAmenities(r.amenities());
 		pg.setStartingPrice(r.startingPrice());
+		PgLocation.apply(pg, r.latitude(), r.longitude(), r.locality(), r.subLocality(), r.pincode(), r.country());
 		pg.setLicenseKey(UUID.randomUUID().toString());
 		pg.setLicenseStart(LocalDateTime.now());
 		pg.setLicenseExpiry(LocalDateTime.now().plusMonths(1));
 		pg.setActive(true);
 		pg = pgs.save(pg);
+		if (r.amenityCodes() != null) {
+			propertyConfig.applyAmenities(pg, r.amenityCodes());
+		}
 
-		UserEntity owner = new UserEntity();
-		owner.setPgId(pg.getId());
-		owner.setUsername(ownerUsername);
-		owner.setMobile(r.ownerMobile());
-		owner.setEmail(r.email());
-		owner.setPassword(encoder.encode(r.ownerPassword()));
-		owner.setRole(Role.OWNER);
-		owner.setMustChangePassword(true);
-		users.save(owner);
+		if (existingOwner != null) {
+			ownerPgs.link(existingOwner.getId(), pg.getId());
+		} else {
+			UserEntity owner = new UserEntity();
+			owner.setPgId(pg.getId());
+			owner.setUsername(ownerUsername);
+			owner.setMobile(r.ownerMobile());
+			owner.setEmail(r.email());
+			owner.setPassword(passwordHash);
+			owner.setRole(Role.OWNER);
+			owner.setMustChangePassword(mustChangePassword);
+			users.save(owner);
+		}
 
 		for (String name : DEFAULT_CATEGORIES) {
 			ExpenseCategory c = new ExpenseCategory();
@@ -161,7 +197,11 @@ public class PgService {
 		if (req.upiName() != null) pg.setUpiName(req.upiName().trim());
 		if (req.description() != null) pg.setDescription(req.description().trim());
 		if (req.amenities() != null) pg.setAmenities(req.amenities().trim());
+		if (req.rules() != null) pg.setRules(req.rules().trim());
 		if (req.startingPrice() != null) pg.setStartingPrice(req.startingPrice());
+		PgLocation.apply(pg, req.latitude(), req.longitude(), req.locality(), req.subLocality(), req.pincode(),
+				req.country());
+		if (req.amenityCodes() != null) propertyConfig.applyAmenities(pg, req.amenityCodes());
 		return toResponse(pgs.save(pg));
 	}
 
@@ -177,6 +217,7 @@ public class PgService {
 				p.getLocationUrl(),
 				p.getGenderType(), p.getUpiId(),
 				p.getUpiName(), p.getDescription(), p.getAmenities(), p.getStartingPrice(), p.getLicenseExpiry(),
-				p.isActive());
+				p.isActive(), p.getLatitude(), p.getLongitude(), p.getLocality(), p.getSubLocality(), p.getPincode(),
+				p.getCountry(), p.getRules());
 	}
 }

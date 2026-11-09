@@ -5,6 +5,7 @@ import java.time.LocalDate;
 import java.util.List;
 
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -12,6 +13,9 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.pg.common.NotFoundException;
+import com.pg.complaint.ComplaintService;
+import com.pg.complaint.ComplaintService.ComplaintRequest;
+import com.pg.complaint.ComplaintService.ComplaintResponse;
 import com.pg.payment.Payment;
 import com.pg.payment.PaymentRepository;
 import com.pg.payment.PaymentService;
@@ -44,14 +48,25 @@ public class MeController {
 	private final PaymentRepository payments;
 	private final PaymentService paymentService;
 	private final PgRepository pgs;
+	private final ComplaintService complaints;
 
 	public MeController(UserRepository users, ResidentService residents, PaymentRepository payments,
-			PaymentService paymentService, PgRepository pgs) {
+			PaymentService paymentService, PgRepository pgs, ComplaintService complaints) {
 		this.users = users;
 		this.residents = residents;
 		this.payments = payments;
 		this.paymentService = paymentService;
 		this.pgs = pgs;
+		this.complaints = complaints;
+	}
+
+	public record HouseRules(String rules) {
+	}
+
+	/** The property's rules and regulations; they rarely change, so the app caches them. */
+	@GetMapping("/rules")
+	public HouseRules rules() {
+		return new HouseRules(pgs.findById(TenantContext.requirePgId()).map(Pg::getRules).orElse(null));
 	}
 
 	@GetMapping("/dues")
@@ -65,6 +80,42 @@ public class MeController {
 		Pg pg = pgs.findById(pgId).orElse(null);
 		PgInfo pgInfo = pg != null ? new PgInfo(pg.getId(), pg.getName(), pg.getStayType() != null ? pg.getStayType() : "PG", pg.getUnitLabel() != null ? pg.getUnitLabel() : "Room", pg.getLocationUrl(), pg.getGenderType(), pg.getUpiId(), pg.getUpiName(), pg.getMobile(), pg.getEmail()) : null;
 		return new MyDues(r, list, pgInfo);
+	}
+
+	public record VacateNoticeRequest(@jakarta.validation.constraints.NotNull LocalDate vacateOn, String reason) {
+	}
+
+	private Long residentId(Authentication auth) {
+		return users.findByUsername(auth.getName()).map(u -> u.getResidentId())
+				.orElseThrow(() -> new NotFoundException("No resident profile linked to this login"));
+	}
+
+	/** Resident gives notice to vacate; the owner then approves it. */
+	@PostMapping("/vacate-notice")
+	public ResidentResponse giveNotice(Authentication auth, @Valid @RequestBody VacateNoticeRequest req) {
+		return residents.requestNotice(residentId(auth), req.vacateOn(), req.reason());
+	}
+
+	@DeleteMapping("/vacate-notice")
+	public ResidentResponse cancelNotice(Authentication auth) {
+		return residents.cancelNotice(residentId(auth));
+	}
+
+	/** The resident's own complaints, newest first. */
+	@GetMapping("/complaints")
+	public List<ComplaintResponse> myComplaints(Authentication auth) {
+		return complaints.listFor(residentId(auth));
+	}
+
+	@PostMapping("/complaints")
+	public ComplaintResponse raiseComplaint(Authentication auth, @Valid @RequestBody ComplaintRequest req) {
+		return complaints.raise(residentId(auth), req);
+	}
+
+	/** Called when the resident opens their complaints, to clear the "updated" indicator. */
+	@PostMapping("/complaints/seen")
+	public void complaintsSeen(Authentication auth) {
+		complaints.markSeen(residentId(auth));
 	}
 
 	@PostMapping("/payments")

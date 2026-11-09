@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.pg.room.RoomService.RentUpdateRequest;
 import com.pg.room.RoomService.RoomRequest;
 import com.pg.room.RoomService.RoomResponse;
 
@@ -40,6 +41,12 @@ public class RoomController {
 	@PutMapping("/{id}")
 	public RoomResponse update(@PathVariable Long id, @Valid @RequestBody RoomRequest req) {
 		return service.update(id, req);
+	}
+
+	/** Rent change: new residents pay it now, current residents from their next billing cycle. */
+	@PutMapping("/{id}/rent")
+	public RoomResponse updateRent(@PathVariable Long id, @RequestBody RentUpdateRequest req) {
+		return service.updateRent(id, req);
 	}
 
 	@DeleteMapping("/{id}")

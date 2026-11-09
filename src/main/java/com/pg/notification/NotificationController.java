@@ -19,6 +19,7 @@ import com.pg.notification.usage.WhatsappMessageLogRepository;
 import com.pg.payment.PaymentRepository;
 import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
+import com.pg.push.PushService;
 import com.pg.resident.Resident;
 import com.pg.resident.ResidentRepository;
 import com.pg.room.Room;
@@ -45,6 +46,7 @@ public class NotificationController {
 	private final PgRepository pgRepository;
 	private final WhatsappMessageLogRepository logRepository;
 	private final Billing billing;
+	private final PushService push;
 
 	@PostMapping("/remind-due/{residentId}")
 	public void remindDue(@PathVariable Long residentId) {
@@ -67,6 +69,13 @@ public class NotificationController {
 
 		whatsAppService.sendDueReminder(pgId, pgName, resident.getName(), resident.getPhone(),
 				room != null ? room.getNumber() : "-", due, pgPhone);
+		pushDue(pgId, pgName, resident.getId(), due);
+	}
+
+	private void pushDue(Long pgId, String pgName, Long residentId, BigDecimal due) {
+		push.toResident(pgId, residentId, "Rent due - " + pgName,
+				"You have Rs. " + due.stripTrailingZeros().toPlainString() + " pending. Please pay at the earliest.",
+				Map.of("type", "DUE"));
 	}
 
 	@PostMapping("/remind-all-dues")
@@ -87,14 +96,20 @@ public class NotificationController {
 		int skipped = 0;
 
 		for (Resident r : residents) {
-			if (r.getPhone() == null || r.getPhone().isBlank()) {
-				skipped++;
-				continue;
-			}
 			Room room = roomById.get(r.getRoomId());
 			BigDecimal billed = billing.billed(r, room);
 			BigDecimal paid = paidByResident.getOrDefault(r.getId(), BigDecimal.ZERO);
 			BigDecimal due = Billing.due(billed, paid);
+			boolean hasPhone = r.getPhone() != null && !r.getPhone().isBlank();
+
+			// The app notification does not need a phone number, so it goes out even when WhatsApp cannot.
+			if (due.signum() > 0) {
+				pushDue(pgId, pgName, r.getId(), due);
+			}
+			if (!hasPhone) {
+				skipped++;
+				continue;
+			}
 
 			if (due.signum() > 0) {
 				whatsAppService.sendDueReminder(pgId, pgName, r.getName(), r.getPhone(),

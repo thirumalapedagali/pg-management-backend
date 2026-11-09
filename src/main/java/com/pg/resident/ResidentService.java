@@ -8,6 +8,7 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,6 +17,7 @@ import com.pg.common.AppClock;
 import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
 import com.pg.notification.WhatsAppService;
+import com.pg.push.PushService;
 import com.pg.payment.PaymentRepository;
 import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
@@ -30,6 +32,9 @@ import com.pg.room.RoomSharingOption;
 import com.pg.room.RoomSharingOptionRepository;
 import com.pg.room.SharingType;
 import com.pg.tenant.TenantContext;
+import com.pg.user.Role;
+import com.pg.user.Status;
+import com.pg.user.UserEntity;
 import com.pg.user.UserRepository;
 
 import jakarta.validation.constraints.NotBlank;
@@ -46,7 +51,8 @@ public class ResidentService {
 			@Pattern(regexp = "^$|\\d{10,15}", message = "must be 10-15 digits") String phone, @NotNull Long roomId,
 			Long sectionId, Long bedId, Long sharingOptionId, StayType stayType, BigDecimal dailyRate,
 			LocalDate checkOutDate, java.time.LocalDateTime checkInTime, java.time.LocalDateTime checkOutTime,
-			BigDecimal rentOverride, BigDecimal securityDeposit, LocalDate joinedOn) {
+			BigDecimal rentOverride, BigDecimal securityDeposit, LocalDate joinedOn,
+			@Pattern(regexp = "^$|\\d{12}", message = "must be 12 digits") String aadhaar) {
 	}
 
 	public record MoveResidentRequest(@NotNull Long roomId, Long sectionId, Long bedId, Long sharingOptionId,
@@ -59,14 +65,26 @@ public class ResidentService {
 			BigDecimal rentOverride, BigDecimal securityDeposit, LocalDate joinedOn) {
 	}
 
+	/** A rent that takes effect from the start of a billing cycle. */
+	public record RentChangeInfo(LocalDate effectiveFrom, BigDecimal rent) {
+	}
+
+	/**
+	 * rent = the rent for the current cycle. baseRent + rentChanges let clients price every past/future cycle.
+	 */
 	public record ResidentResponse(Long id, String name, String phone, Long roomId, String roomNumber,
 			Long sectionId, String sectionName, Long bedId, String bedNumber,
 			Long sharingOptionId, SharingType sharingType, StayType stayType, BigDecimal dailyRate,
 			LocalDate checkOutDate, java.time.LocalDateTime checkInTime, java.time.LocalDateTime checkOutTime,
 			int daysStayed, Double hoursStayed,
-			LocalDate joinedOn, BigDecimal rent, BigDecimal securityDeposit, BigDecimal billed, BigDecimal paid, BigDecimal due,
-			ResidentStatus status) {
+			LocalDate joinedOn, BigDecimal rent, BigDecimal baseRent, List<RentChangeInfo> rentChanges,
+			BigDecimal securityDeposit, BigDecimal billed, BigDecimal paid, BigDecimal due,
+			ResidentStatus status, NoticeStatus noticeStatus, LocalDate noticeGivenOn, LocalDate vacateOn,
+			String noticeReason, String photoUrl) {
 	}
+
+	/** Minimum days between giving notice and leaving. */
+	public static final int NOTICE_DAYS = 30;
 
 	private final ResidentRepository residents;
 	private final RoomRepository rooms;
@@ -77,12 +95,21 @@ public class ResidentService {
 	private final UserRepository users;
 	private final PgRepository pgs;
 	private final Billing billing;
+	private final ResidentRentChangeRepository rentChanges;
 	private final WhatsAppService whatsAppService;
 	private final AppClock clock;
+	private final com.pg.attachment.MediaService media;
+	private final PasswordEncoder encoder;
+	private final PushService push;
 
 	public ResidentService(ResidentRepository residents, RoomRepository rooms, RoomSectionRepository sections,
 			BedRepository beds, RoomSharingOptionRepository sharingOptions, PaymentRepository payments,
-			UserRepository users, PgRepository pgs, Billing billing, WhatsAppService whatsAppService, AppClock clock) {
+			UserRepository users, PgRepository pgs, Billing billing, ResidentRentChangeRepository rentChanges,
+			WhatsAppService whatsAppService, AppClock clock, com.pg.attachment.MediaService media,
+			PasswordEncoder encoder, PushService push) {
+		this.encoder = encoder;
+		this.media = media;
+		this.rentChanges = rentChanges;
 		this.residents = residents;
 		this.rooms = rooms;
 		this.sections = sections;
@@ -94,6 +121,7 @@ public class ResidentService {
 		this.billing = billing;
 		this.whatsAppService = whatsAppService;
 		this.clock = clock;
+		this.push = push;
 	}
 
 	public List<ResidentResponse> list() {
@@ -101,7 +129,11 @@ public class ResidentService {
 	}
 
 	public List<ResidentResponse> list(String statusFilter) {
-		Long pgId = TenantContext.requirePgId();
+		return list(TenantContext.requirePgId(), statusFilter);
+	}
+
+	/** Same as {@link #list(String)} for an explicit PG, so callers need not switch the tenant context. */
+	public List<ResidentResponse> list(Long pgId, String statusFilter) {
 		Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
 				.collect(Collectors.toMap(Room::getId, Function.identity()));
 		Map<Long, RoomSection> sectionById = sections.findByPgIdOrderBySectionName(pgId).stream()
@@ -114,7 +146,10 @@ public class ResidentService {
 		for (Object[] row : payments.sumByResident(pgId)) {
 			paid.put((Long) row[0], (BigDecimal) row[1]);
 		}
+		Map<Long, List<ResidentRentChange>> changesByResident = rentChanges.findByPgIdOrderByEffectiveFrom(pgId).stream()
+				.collect(Collectors.groupingBy(ResidentRentChange::getResidentId));
 
+		Map<Long, String> photos = media.residentPhotos(pgId);
 		List<Resident> resList;
 		if ("ALL".equalsIgnoreCase(statusFilter)) {
 			resList = residents.findByPgIdOrderByName(pgId);
@@ -129,7 +164,8 @@ public class ResidentService {
 						r.getSectionId() != null ? sectionById.get(r.getSectionId()) : null,
 						r.getBedId() != null ? bedById.get(r.getBedId()) : null,
 						r.getSharingOptionId() != null ? optionById.get(r.getSharingOptionId()) : null,
-						paid.getOrDefault(r.getId(), BigDecimal.ZERO)))
+						paid.getOrDefault(r.getId(), BigDecimal.ZERO),
+						changesByResident.getOrDefault(r.getId(), List.of()), photos.get(r.getId())))
 				.toList();
 	}
 
@@ -234,6 +270,8 @@ public class ResidentService {
 			beds.save(assignedBed);
 		}
 
+		createLogin(r, req.aadhaar());
+
 		// Send WhatsApp Welcome Message safely
 		try {
 			Pg pg = pgs.findById(pgId).orElse(null);
@@ -246,6 +284,38 @@ public class ResidentService {
 		}
 
 		return toResponse(r, room, section, assignedBed, opt, BigDecimal.ZERO);
+	}
+
+	/**
+	 * Gives the resident a login: username = mobile number, first password = last 4 digits of the Aadhaar number
+	 * (the resident must change it at first login). An existing login on that number is linked instead. The Aadhaar
+	 * number itself is never stored.
+	 */
+	private void createLogin(Resident r, String aadhaar) {
+		String phone = r.getPhone();
+		if (phone == null || phone.length() > 15 || aadhaar == null || !aadhaar.matches("\\d{12}")) {
+			return;
+		}
+		UserEntity existing = users.findByMobile(phone).or(() -> users.findByUsername(phone)).orElse(null);
+		if (existing != null) {
+			if (existing.getRole() != Role.RESIDENT) {
+				throw new BadRequestException("Mobile number " + phone + " already belongs to another account");
+			}
+			existing.setPgId(r.getPgId());
+			existing.setResidentId(r.getId());
+			users.save(existing);
+			return;
+		}
+		UserEntity u = new UserEntity();
+		u.setUsername(phone);
+		u.setMobile(phone);
+		u.setRole(Role.RESIDENT);
+		u.setStatus(Status.ACTIVE);
+		u.setPgId(r.getPgId());
+		u.setResidentId(r.getId());
+		u.setPassword(encoder.encode(aadhaar.substring(8)));
+		u.setMustChangePassword(true);
+		users.save(u);
 	}
 
 	@Transactional
@@ -352,7 +422,18 @@ public class ResidentService {
 
 		String previousRoomNumber = roomChanged ? rooms.findById(r.getRoomId()).map(Room::getNumber).orElse(null) : null;
 
+		BigDecimal baseBefore = r.getRentOverride();
+		BigDecimal currentBefore = billing.currentRent(r, room, null);
 		apply(r, req, assignedBed, section, opt, room, roomChanged);
+		boolean rentNotChangedByRequest = !roomChanged && baseBefore != null
+				&& (req.rentOverride() == null || req.rentOverride().compareTo(currentBefore) == 0);
+		if (rentNotChangedByRequest) {
+			// Keep the resident's own rent and any rent change scheduled for their next cycle.
+			r.setRentOverride(baseBefore);
+		} else {
+			// Moved, or the rent was set explicitly: a previously scheduled change no longer applies.
+			rentChanges.deleteByPgIdAndResidentId(pgId, id);
+		}
 		r = residents.save(r);
 
 		if (roomChanged && previousRoomNumber != null) {
@@ -387,7 +468,8 @@ public class ResidentService {
 				req.checkOutTime() != null ? req.checkOutTime() : r.getCheckOutTime(),
 				req.rentOverride(),
 				req.securityDeposit() != null ? req.securityDeposit() : r.getSecurityDeposit(),
-				r.getJoinedOn()
+				r.getJoinedOn(),
+				null
 		);
 		return update(id, updateReq);
 	}
@@ -436,7 +518,6 @@ public class ResidentService {
 		LocalDate outDate = outDateTime.toLocalDate();
 
 		// Check dues strictly up to checkout date
-		int months = billing.monthsBilled(r.getJoinedOn(), outDate);
 		BigDecimal billed;
 		if (r.getStayType() == StayType.DAILY) {
 			int days = billing.daysStayed(r.getCheckInTime(), outDateTime, r.getJoinedOn(), outDate);
@@ -446,9 +527,7 @@ public class ResidentService {
 					: (room != null && room.getRent() != null ? room.getRent().divide(BigDecimal.valueOf(30), 2, java.math.RoundingMode.HALF_UP) : BigDecimal.ZERO)));
 			billed = rate.multiply(BigDecimal.valueOf(days));
 		} else {
-			BigDecimal rent = r.getRentOverride() != null ? r.getRentOverride()
-					: (room != null ? room.getRent() : BigDecimal.ZERO);
-			billed = rent.multiply(BigDecimal.valueOf(months));
+			billed = billing.monthlyBilled(r, room, outDate, null);
 		}
 
 		BigDecimal paid = payments.sumForResident(pgId, id);
@@ -472,6 +551,7 @@ public class ResidentService {
 		r.setCheckOutDate(outDate);
 		r.setCheckOutTime(outDateTime);
 		r.setStatus(ResidentStatus.CHECKED_OUT);
+		clearNotice(r);
 		r = residents.save(r);
 
 		RoomSection section = r.getSectionId() != null
@@ -479,6 +559,92 @@ public class ResidentService {
 		RoomSharingOption opt = r.getSharingOptionId() != null
 				? sharingOptions.findByPgIdAndId(pgId, r.getSharingOptionId()).orElse(null) : null;
 		return toResponse(r, room, section, null, opt, paid);
+	}
+
+	/** Resident asks to leave on {@code vacateOn}; at least {@link #NOTICE_DAYS} days ahead. Waits for the owner. */
+	@Transactional
+	public ResidentResponse requestNotice(Long id, LocalDate vacateOn, String reason) {
+		Resident r = find(id);
+		if (r.getStatus() != ResidentStatus.ACTIVE) {
+			throw new BadRequestException("Only a current resident can give notice");
+		}
+		if (r.getNoticeStatus() == NoticeStatus.REQUESTED || r.getNoticeStatus() == NoticeStatus.APPROVED) {
+			throw new BadRequestException("A notice to vacate is already in place. Cancel it first to change the date.");
+		}
+		if (vacateOn == null) {
+			throw new BadRequestException("Choose the date you will leave");
+		}
+		LocalDate today = clock.today();
+		if (vacateOn.isBefore(today.plusDays(NOTICE_DAYS))) {
+			throw new BadRequestException("Notice must be at least " + NOTICE_DAYS + " days. Earliest leaving date is "
+					+ today.plusDays(NOTICE_DAYS));
+		}
+		r.setNoticeStatus(NoticeStatus.REQUESTED);
+		r.setNoticeGivenOn(today);
+		r.setVacateOn(vacateOn);
+		r.setNoticeReason(reason != null && !reason.isBlank() ? reason.trim() : null);
+		residents.save(r);
+
+		try {
+			push.toStaff(r.getPgId(), "New Vacate Request", r.getName() + " has requested to vacate on " + vacateOn + ".");
+			push.toResident(r.getPgId(), r.getId(), "Vacate Request Submitted", "Your request to vacate on " + vacateOn + " has been submitted successfully.");
+		} catch (Exception e) {
+			log.warn("Failed to send vacate request push notification: {}", e.getMessage());
+		}
+
+		return get(id);
+	}
+
+	public long pendingNoticeCount() {
+		return residents.countByPgIdAndStatusAndNoticeStatus(TenantContext.requirePgId(), ResidentStatus.ACTIVE,
+				NoticeStatus.REQUESTED);
+	}
+
+	/** Resident (or owner) withdraws a notice that has not been completed. */
+	@Transactional
+	public ResidentResponse cancelNotice(Long id) {
+		Resident r = find(id);
+		if (r.getNoticeStatus() == null) {
+			throw new BadRequestException("There is no notice to cancel");
+		}
+		clearNotice(r);
+		residents.save(r);
+
+		try {
+			push.toStaff(r.getPgId(), "Vacate Notice Cancelled", r.getName() + " has cancelled their notice to vacate.");
+			push.toResident(r.getPgId(), r.getId(), "Vacate Notice Cancelled", "Your notice to vacate has been successfully cancelled.");
+		} catch (Exception e) {
+			log.warn("Failed to send vacate cancel push notification: {}", e.getMessage());
+		}
+
+		return get(id);
+	}
+
+	/** Owner accepts or declines a requested notice. Once approved the bed is advertised as available from the date. */
+	@Transactional
+	public ResidentResponse decideNotice(Long id, boolean approve) {
+		Resident r = find(id);
+		if (r.getNoticeStatus() != NoticeStatus.REQUESTED) {
+			throw new BadRequestException("This resident has no pending notice request");
+		}
+		r.setNoticeStatus(approve ? NoticeStatus.APPROVED : NoticeStatus.REJECTED);
+		residents.save(r);
+
+		try {
+			String statusText = approve ? "approved" : "rejected";
+			push.toResident(r.getPgId(), r.getId(), "Vacate Request Update", "Your request to vacate on " + r.getVacateOn() + " has been " + statusText + ".");
+		} catch (Exception e) {
+			log.warn("Failed to send vacate decision push notification: {}", e.getMessage());
+		}
+
+		return get(id);
+	}
+
+	private static void clearNotice(Resident r) {
+		r.setNoticeStatus(null);
+		r.setNoticeGivenOn(null);
+		r.setVacateOn(null);
+		r.setNoticeReason(null);
 	}
 
 	/** Re-joins an old/ex-resident into a new room and bed allocation. */
@@ -562,6 +728,7 @@ public class ResidentService {
 			opt = sharingOptions.findByPgIdAndId(pgId, req.sharingOptionId()).orElse(null);
 		}
 
+		rentChanges.deleteByPgIdAndResidentId(pgId, id);
 		r.setRoomId(room.getId());
 		r.setStatus(ResidentStatus.ACTIVE);
 		r.setCheckOutDate(null);
@@ -647,8 +814,10 @@ public class ResidentService {
 		});
 
 		payments.deleteByPgIdAndResidentId(pgId, id);
+		rentChanges.deleteByPgIdAndResidentId(pgId, id);
 		users.findByPgIdAndResidentId(pgId, id).ifPresent(users::delete);
 		residents.delete(r);
+		media.removeAll("RESIDENT", pgId, id);
 	}
 
 	private Resident find(Long id) {
@@ -740,9 +909,17 @@ public class ResidentService {
 	}
 
 	private ResidentResponse toResponse(Resident r, Room room, RoomSection section, Bed bed, RoomSharingOption opt, BigDecimal paid) {
-		BigDecimal rent = r.getRentOverride() != null ? r.getRentOverride()
+		return toResponse(r, room, section, bed, opt, paid, null, media.residentPhoto(r.getPgId(), r.getId()));
+	}
+
+	/** {@code changes} = the resident's scheduled rent changes, ascending; null loads them. */
+	private ResidentResponse toResponse(Resident r, Room room, RoomSection section, Bed bed, RoomSharingOption opt, BigDecimal paid,
+			List<ResidentRentChange> changes, String photoUrl) {
+		List<ResidentRentChange> rc = changes != null ? changes : billing.changesFor(r);
+		BigDecimal baseRent = r.getRentOverride() != null ? r.getRentOverride()
 				: (opt != null ? opt.getRentPerBed() : (room == null ? BigDecimal.ZERO : room.getRent()));
-		BigDecimal billed = room == null ? BigDecimal.ZERO : billing.billed(r, room);
+		BigDecimal rent = r.getStayType() == StayType.DAILY ? baseRent : currentRent(r, baseRent, rc);
+		BigDecimal billed = room == null ? BigDecimal.ZERO : billing.billed(r, room, rc);
 		BigDecimal deposit = r.getSecurityDeposit() != null ? r.getSecurityDeposit()
 				: (section != null && section.getDepositPerBed() != null ? section.getDepositPerBed() : BigDecimal.ZERO);
 		int daysStayed = r.getStayType() == StayType.DAILY
@@ -757,7 +934,19 @@ public class ResidentService {
 				r.getStayType(), r.getDailyRate(),
 				r.getCheckOutDate(), r.getCheckInTime(), r.getCheckOutTime(),
 				daysStayed, hoursStayed,
-				r.getJoinedOn(), rent, deposit, billed, paid, Billing.due(billed, paid),
-				r.getStatus());
+				r.getJoinedOn(), rent, baseRent,
+				rc.stream().map(c -> new RentChangeInfo(c.getEffectiveFrom(), c.getRent())).toList(),
+				deposit, billed, paid, Billing.due(billed, paid),
+				r.getStatus(), r.getNoticeStatus(), r.getNoticeGivenOn(), r.getVacateOn(), r.getNoticeReason(),
+				photoUrl);
+	}
+
+	private BigDecimal currentRent(Resident r, BigDecimal baseRent, List<ResidentRentChange> rc) {
+		if (r.getJoinedOn() == null) {
+			return baseRent;
+		}
+		LocalDate today = clock.today();
+		long elapsed = today.isBefore(r.getJoinedOn()) ? 0 : java.time.temporal.ChronoUnit.MONTHS.between(r.getJoinedOn(), today);
+		return Billing.rentForCycle(baseRent, rc, r.getJoinedOn().plusMonths(elapsed));
 	}
 }

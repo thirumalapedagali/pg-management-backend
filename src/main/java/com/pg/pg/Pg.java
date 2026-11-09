@@ -33,6 +33,21 @@ public class Pg {
 	private String city;
 	private String state;
 
+	/**
+	 * Where the property is. Latitude/longitude are WGS84 degrees. On PostgreSQL a generated column
+	 * {@code location geography(Point,4326)} is derived from them (see PostgisInitializer), so it is always in step.
+	 */
+	private Double latitude;
+	private Double longitude;
+	@Column(length = 120)
+	private String locality;
+	@Column(name = "sub_locality", length = 120)
+	private String subLocality;
+	@Column(length = 12)
+	private String pincode;
+	@Column(length = 80)
+	private String country;
+
 	private String plan;
 	@Column(name = "total_floors", nullable = false)
 	private Integer totalFloors = 3;
@@ -51,6 +66,10 @@ public class Pg {
 
 	@Column(length = 1500)
 	private String amenities;
+
+	/** House rules and regulations shown to residents on their notice board. */
+	@Column(length = 4000)
+	private String rules;
 
 	@Column(name = "starting_price", precision = 12, scale = 2)
 	private java.math.BigDecimal startingPrice;

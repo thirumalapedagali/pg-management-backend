@@ -3,18 +3,22 @@ package com.pg.billing;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 
 import org.springframework.stereotype.Component;
 
 import com.pg.common.AppClock;
 import com.pg.resident.Resident;
+import com.pg.resident.ResidentRentChange;
+import com.pg.resident.ResidentRentChangeRepository;
 import com.pg.resident.StayType;
 import com.pg.room.Room;
 
 /**
  * Billing rules:
- * - MONTHLY: a resident owes the room's rent for each monthly billing cycle calculated
- *   directly from their joining date through the current date, inclusive.
+ * - MONTHLY: a resident owes the rent for each monthly billing cycle calculated
+ *   directly from their joining date through the current date, inclusive. Each cycle uses the rent in force
+ *   at its start: the resident's base rent, or the latest {@link ResidentRentChange} effective on/before it.
  * - DAILY: a resident owes their configured daily rate multiplied by the number of days stayed
  *   from joining date to checkout/today.
  * due = max(0, billed - paid).
@@ -23,9 +27,11 @@ import com.pg.room.Room;
 public class Billing {
 
 	private final AppClock clock;
+	private final ResidentRentChangeRepository rentChanges;
 
-	public Billing(AppClock clock) {
+	public Billing(AppClock clock, ResidentRentChangeRepository rentChanges) {
 		this.clock = clock;
+		this.rentChanges = rentChanges;
 	}
 
 	public int monthsBilled(LocalDate joinedOn) {
@@ -88,6 +94,11 @@ public class Billing {
 	}
 
 	public BigDecimal billed(Resident r, Room room) {
+		return billed(r, room, null);
+	}
+
+	/** {@code changes} may be null (loaded on demand) or pre-loaded, ascending by effective date. */
+	public BigDecimal billed(Resident r, Room room, List<ResidentRentChange> changes) {
 		if (r == null || (r.getJoinedOn() == null && r.getCheckInTime() == null)) {
 			return BigDecimal.ZERO;
 		}
@@ -99,9 +110,64 @@ public class Billing {
 			int days = daysStayed(r.getCheckInTime(), r.getCheckOutTime(), r.getJoinedOn(), r.getCheckOutDate());
 			return dailyRate.multiply(BigDecimal.valueOf(days));
 		}
-		BigDecimal rent = r.getRentOverride() != null ? r.getRentOverride()
-				: (room != null ? room.getRent() : BigDecimal.ZERO);
-		return rent.multiply(BigDecimal.valueOf(monthsBilled(r.getJoinedOn(), r.getCheckOutDate())));
+		return monthlyBilled(r, room, r.getCheckOutDate(), changes);
+	}
+
+	/** Monthly rent owed from joining up to {@code end} (null = today). */
+	public BigDecimal monthlyBilled(Resident r, Room room, LocalDate end, List<ResidentRentChange> changes) {
+		if (r.getJoinedOn() == null) {
+			return BigDecimal.ZERO;
+		}
+		BigDecimal base = baseRent(r, room);
+		List<ResidentRentChange> list = changes != null ? changes : changesFor(r);
+		int months = monthsBilled(r.getJoinedOn(), end);
+		BigDecimal total = BigDecimal.ZERO;
+		for (int k = 0; k < months; k++) {
+			total = total.add(rentForCycle(base, list, r.getJoinedOn().plusMonths(k)));
+		}
+		return total;
+	}
+
+	/** The rent the resident joined with (before any scheduled change). */
+	public BigDecimal baseRent(Resident r, Room room) {
+		return r.getRentOverride() != null ? r.getRentOverride() : (room != null ? room.getRent() : BigDecimal.ZERO);
+	}
+
+	/** Rent for the billing cycle starting on {@code cycleStart}; {@code changes} must be ascending by date. */
+	public static BigDecimal rentForCycle(BigDecimal base, List<ResidentRentChange> changes, LocalDate cycleStart) {
+		BigDecimal rent = base;
+		for (ResidentRentChange c : changes) {
+			if (!c.getEffectiveFrom().isAfter(cycleStart)) {
+				rent = c.getRent();
+			}
+		}
+		return rent;
+	}
+
+	/** Rent for the cycle that contains today. */
+	public BigDecimal currentRent(Resident r, Room room, List<ResidentRentChange> changes) {
+		BigDecimal base = baseRent(r, room);
+		if (r.getJoinedOn() == null) {
+			return base;
+		}
+		List<ResidentRentChange> list = changes != null ? changes : changesFor(r);
+		LocalDate today = clock.today();
+		long elapsed = today.isBefore(r.getJoinedOn()) ? 0 : ChronoUnit.MONTHS.between(r.getJoinedOn(), today);
+		return rentForCycle(base, list, r.getJoinedOn().plusMonths(elapsed));
+	}
+
+	/** Start date of the resident's next billing cycle (their joining date if they have not joined yet). */
+	public LocalDate nextCycleStart(Resident r) {
+		LocalDate today = clock.today();
+		if (r.getJoinedOn() == null || today.isBefore(r.getJoinedOn())) {
+			return r.getJoinedOn() != null ? r.getJoinedOn() : today;
+		}
+		return r.getJoinedOn().plusMonths(ChronoUnit.MONTHS.between(r.getJoinedOn(), today) + 1);
+	}
+
+	/** Scheduled rent changes for a resident, ascending by effective date. */
+	public List<ResidentRentChange> changesFor(Resident r) {
+		return rentChanges.findByPgIdAndResidentIdOrderByEffectiveFrom(r.getPgId(), r.getId());
 	}
 
 	public static BigDecimal due(BigDecimal billed, BigDecimal paid) {

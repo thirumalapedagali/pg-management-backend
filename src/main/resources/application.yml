@@ -1,17 +1,16 @@
 server:
   port: ${PORT:8083}
 
+
 spring:
   application:
     name: pg-management-backend
   datasource:
-    url: jdbc:postgresql://ep-purple-paper-b4s4wo89-pooler.c-6.us-east-2.aws.neon.tech/neondb?user=neondb_owner&password=npg_94UfktILAMWl&sslmode=require&channelBinding=require
+    url: jdbc:postgresql://ep-purple-paper-b4s4wo89-pooler.c-6.us-east-2.aws.neon.tech/neondb?user=neondb_owner&password=npg_9G6wxyaDHNWz&sslmode=require&channelBinding=require
 #    username: ${DB_USER}
 #    password: ${DB_PASSWORD}
   jpa:
-    open-in-view: false
     hibernate:
-      # First run against an empty database: set DDL_AUTO=update (or use a migration tool).
       ddl-auto: update
 
 
@@ -21,15 +20,45 @@ logging:
     level: "%5p [%X{req:--}|%X{user:--}|pg=%X{pg:--}]"
   level:
     com.pg: ${APP_LOG_LEVEL:INFO}
-    # SQL statements. Set SQL_LOG_LEVEL=INFO to silence.
-    org.hibernate.SQL: ${SQL_LOG_LEVEL:DEBUG}
+    # SQL statements (set SQL_LOG_LEVEL=DEBUG to see them; logging every statement slows requests down).
+    org.hibernate.SQL: ${SQL_LOG_LEVEL:INFO}
     # Bound parameter values (? placeholders). TRACE to enable. Values can include personal data and
     # password hashes, so this is off unless you ask for it (or use the "dev" profile).
     org.hibernate.orm.jdbc.bind: ${SQL_BIND_LOG_LEVEL:INFO}
     org.hibernate.SQL_SLOW: INFO			
 
+# File storage. Set CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>; when empty, uploads are refused.
+cloudinary:
+  url: cloudinary://634464576123254:Tn6YCVNOd75SMU_a3GdiXnLUUlk@dbrszzpci
+
 app:
   timezone: ${APP_TIMEZONE:Asia/Kolkata}
+  # Location-based stay search.
+  stays:
+    # postgis (PostgreSQL + PostGIS; required in production) | haversine (only for H2 in the dev profile)
+    spatial-engine: ${STAYS_SPATIAL_ENGINE:postgis}
+    max-radius-km: 50
+    default-radius-km: 5
+    max-page-size: 50
+  # Turns "Marathahalli, Bengaluru" into coordinates. Switch provider with GEOCODING_PROVIDER, no code change.
+  geocoding:
+    # nominatim (OpenStreetMap, free, 1 request/second policy) | google (needs GOOGLE_GEOCODING_API_KEY) | none
+    provider: ${GEOCODING_PROVIDER:nominatim}
+    country-codes: ${GEOCODING_COUNTRY_CODES:in}
+    cache-hours: 168
+    cache-size: 5000
+    nominatim:
+      base-url: ${NOMINATIM_URL:https://nominatim.openstreetmap.org}
+      # Nominatim's policy requires an identifying User-Agent; put a contact address in it.
+      user-agent: ${NOMINATIM_USER_AGENT:MyStay-PG-Management/1.0}
+      min-interval-ms: 1100
+    google:
+      api-key: ${GOOGLE_GEOCODING_API_KEY:}
+  # Push notifications through Firebase Cloud Messaging. Leave both empty to switch them off.
+  # Give either the path of the service-account key file or the JSON itself (handy on hosts without a file system).
+  push:
+    credentials-file: ${FIREBASE_CREDENTIALS_FILE:firebase-credentials.json}
+    credentials-json: ${FIREBASE_CREDENTIALS_JSON:}
   crypto:
     secret: ${APP_CRYPTO_SECRET:mypg-secret-encryption-key-32chars}
   jwt:

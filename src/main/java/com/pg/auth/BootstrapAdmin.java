@@ -37,7 +37,7 @@ public class BootstrapAdmin implements ApplicationRunner {
 
 	@Override
 	public void run(ApplicationArguments args) {
-		if (users.existsByRole(Role.SUPER_ADMIN)) {
+		if (users.existsByUsername(username)) {
 			return;
 		}
 		if (password == null || password.length() < 8) {

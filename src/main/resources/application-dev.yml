@@ -10,9 +10,20 @@ spring:
       ddl-auto: create-drop
 
 app:
+  # H2 has no PostGIS. The dev/test profile uses an exact great-circle (haversine) formula instead; production
+  # (PostgreSQL) must use PostGIS - see app.stays.spatial-engine in application.yml.
+  stays:
+    spatial-engine: haversine
+  # Never call a real geocoder from tests or local runs unless you opt in.
+  geocoding:
+    provider: ${GEOCODING_PROVIDER:none}
   crypto:
     secret: dev-only-crypto-secret-key-32chars
   jwt:
     secret: dev-only-secret-dev-only-secret-dev-only-1234
   bootstrap-admin:
     password: DevAdmin#123
+  cors:
+    origins: "*"
+  push:
+    credentials-file: "firebase-credentials.json"

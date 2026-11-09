@@ -9,6 +9,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import com.pg.pg.Pg;
+import com.pg.pg.OwnerPgAccess;
 import com.pg.pg.PgRepository;
 import com.pg.security.JwtService.TokenData;
 import com.pg.tenant.TenantContext;
@@ -36,11 +37,13 @@ public class JwtFilter extends OncePerRequestFilter {
 	private final JwtService jwtService;
 	private final UserRepository users;
 	private final PgRepository pgs;
+	private final OwnerPgAccess access;
 
-	public JwtFilter(JwtService jwtService, UserRepository users, PgRepository pgs) {
+	public JwtFilter(JwtService jwtService, UserRepository users, PgRepository pgs, OwnerPgAccess access) {
 		this.jwtService = jwtService;
 		this.users = users;
 		this.pgs = pgs;
+		this.access = access;
 	}
 
 	@Override
@@ -70,11 +73,13 @@ public class JwtFilter extends OncePerRequestFilter {
 			return;
 		}
 		if (user.getRole() != Role.SUPER_ADMIN && user.getPgId() != null) {
-			// Never trust a pgId from the token over the user's own row.
-			if (!user.getPgId().equals(data.pgId())) {
+			// Never trust a pgId from the token over the user's own row. An owner may hold several properties.
+			boolean allowed = user.getRole() == Role.OWNER ? access.owns(user, data.pgId())
+					: user.getPgId().equals(data.pgId());
+			if (!allowed) {
 				return;
 			}
-			Pg pg = pgs.findById(user.getPgId()).orElse(null);
+			Pg pg = pgs.findById(data.pgId()).orElse(null);
 			if (pg == null || !pg.isLicenseValid()) {
 				return;
 			}
