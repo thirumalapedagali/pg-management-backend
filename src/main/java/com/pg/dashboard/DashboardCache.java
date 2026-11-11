@@ -47,6 +47,9 @@ public class DashboardCache {
 	private final Cache<RoomsKey, Object> rooms = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1))
 			.maximumSize(1000).build();
 
+	private final Cache<Long, Object> profiles = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(24))
+			.maximumSize(500).build();
+
 	/** Per-property value of the given kind for a day; the loader runs only on a miss (failures are not cached). */
 	@SuppressWarnings("unchecked")
 	public <T> T pg(String kind, Long pgId, LocalDate day, Supplier<T> loader) {
@@ -63,6 +66,12 @@ public class DashboardCache {
 	@SuppressWarnings("unchecked")
 	public <T> T owned(String username, Supplier<T> loader) {
 		return (T) owned.get(username, k -> loader.get());
+	}
+
+	/** PG settings profile. Since it almost never changes, we cache it for 24 hours. */
+	@SuppressWarnings("unchecked")
+	public <T> T profile(Long pgId, Supplier<T> loader) {
+		return (T) profiles.get(pgId, k -> loader.get());
 	}
 
 	/**
@@ -97,9 +106,14 @@ public class DashboardCache {
 		owned.invalidateAll();
 	}
 
+	public void evictProfile(Long pgId) {
+		profiles.invalidate(pgId);
+	}
+
 	public void evictAll() {
 		pgData.invalidateAll();
 		rooms.invalidateAll();
 		owned.invalidateAll();
+		profiles.invalidateAll();
 	}
 }

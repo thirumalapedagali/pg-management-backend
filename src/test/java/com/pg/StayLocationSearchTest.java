@@ -367,6 +367,7 @@ class StayLocationSearchTest {
 				+ ",\"bedId\":" + bedId + ",\"joinedOn\":\"" + LocalDate.now() + "\"}");
 		assertThat(res.status()).isEqualTo(200);
 		long residentId = res.body().get("id").asLong();
+		assertThat(call("POST", "/api/payments", soon.owner(), "{\"residentId\":" + residentId + ",\"amount\":7000}").status()).isEqualTo(200);
 		String resident = login("93000" + n + "00", "9012");
 		String leaveOn = LocalDate.now().plusDays(40).toString();
 

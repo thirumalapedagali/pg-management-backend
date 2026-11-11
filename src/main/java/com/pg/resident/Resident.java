@@ -74,6 +74,9 @@ public class Resident extends BaseEntity {
 	@Column(name = "security_deposit", precision = 12, scale = 2)
 	private BigDecimal securityDeposit = BigDecimal.ZERO;
 
+	@Column(name = "returned_deposit", precision = 12, scale = 2)
+	private BigDecimal returnedDeposit = BigDecimal.ZERO;
+
 	@Column(nullable = false)
 	private LocalDate joinedOn;
 

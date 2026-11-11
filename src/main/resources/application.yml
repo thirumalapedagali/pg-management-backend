@@ -7,6 +7,7 @@ spring:
     name: pg-management-backend
   datasource:
     url: jdbc:postgresql://ep-purple-paper-b4s4wo89-pooler.c-6.us-east-2.aws.neon.tech/neondb?user=neondb_owner&password=npg_9G6wxyaDHNWz&sslmode=require&channelBinding=require
+#     url: jdbc:postgresql://ep-empty-sun-bdutbpf8-pooler.c-8.us-east-2.aws.neon.tech/neondb?user=neondb_owner&password=npg_g0vAi2cWNjyz&sslmode=require&channelBinding=require
 #    username: ${DB_USER}
 #    password: ${DB_PASSWORD}
   jpa:

@@ -15,6 +15,7 @@ import org.springframework.web.bind.annotation.RestController;
 import com.pg.resident.ResidentService.MoveResidentRequest;
 import com.pg.resident.ResidentService.ResidentRequest;
 import com.pg.resident.ResidentService.ResidentResponse;
+import com.pg.common.Paged;
 
 import jakarta.validation.Valid;
 
@@ -29,8 +30,23 @@ public class ResidentController {
 	}
 
 	@GetMapping
-	public List<ResidentResponse> list(@org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "ACTIVE") String status) {
-		return service.list(status);
+	public ResponseEntity<?> list(
+			@org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "ACTIVE") String status,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) String search,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) String filter,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) String floor,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Integer page,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) Integer size) {
+		if (page != null) {
+			int pageSize = size != null ? size : 20;
+			return ResponseEntity.ok(service.listPaged(status, search, filter, floor, page, pageSize));
+		}
+		return ResponseEntity.ok(service.list(status));
+	}
+
+	@GetMapping("/summary")
+	public ResponseEntity<ResidentService.ResidentSummaryResponse> summary() {
+		return ResponseEntity.ok(service.getSummary());
 	}
 
 	/** Notice-to-vacate requests waiting for the owner (dashboard badge). */
@@ -73,14 +89,16 @@ public class ResidentController {
 	@PostMapping("/{id}/vacate")
 	public ResidentResponse vacate(@PathVariable Long id,
 			@org.springframework.web.bind.annotation.RequestParam(required = false) java.time.LocalDate checkOutDate,
-			@org.springframework.web.bind.annotation.RequestParam(required = false) java.time.LocalDateTime checkOutTime) {
-		return service.vacate(id, checkOutDate, checkOutTime);
+			@org.springframework.web.bind.annotation.RequestParam(required = false) java.time.LocalDateTime checkOutTime,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) java.math.BigDecimal returnedDeposit) {
+		return service.vacate(id, checkOutDate, checkOutTime, returnedDeposit);
 	}
 
 	/** Owner decision on a resident's notice to vacate. */
 	@PostMapping("/{id}/notice/approve")
-	public ResidentResponse approveNotice(@PathVariable Long id) {
-		return service.decideNotice(id, true);
+	public ResidentResponse approveNotice(@PathVariable Long id,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) java.math.BigDecimal returnedDeposit) {
+		return service.decideNotice(id, true, returnedDeposit);
 	}
 
 	@PostMapping("/{id}/notice/reject")

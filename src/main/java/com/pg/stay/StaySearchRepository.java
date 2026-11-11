@@ -44,7 +44,7 @@ public class StaySearchRepository {
 
 	/** Beds of one property that matched, grouped by sharing type. */
 	public record SharingRow(long pgId, String sharingType, BigDecimal minRent, BigDecimal maxRent, int available,
-			int upcoming, LocalDate availableFrom) {
+			int upcoming, LocalDate availableFrom, BigDecimal minDeposit, BigDecimal maxDeposit) {
 	}
 
 	private final NamedParameterJdbcTemplate jdbc;
@@ -92,11 +92,13 @@ public class StaySearchRepository {
 		String sql = "SELECT b.pg_id, s.sharing_type, MIN(" + BED_RENT + "), MAX(" + BED_RENT + "), "
 				+ "SUM(CASE WHEN b.status = 'VACANT' THEN 1 ELSE 0 END), "
 				+ "SUM(CASE WHEN b.status <> 'VACANT' AND lv.vacate_on IS NOT NULL THEN 1 ELSE 0 END), "
-				+ "MIN(CASE WHEN b.status <> 'VACANT' THEN lv.vacate_on END) " + BED_JOIN
+				+ "MIN(CASE WHEN b.status <> 'VACANT' THEN lv.vacate_on END), "
+				+ "MIN(s.deposit_per_bed), MAX(s.deposit_per_bed) " + BED_JOIN
 				+ "WHERE b.pg_id IN (:ids)" + bedWhere(f, p) + " GROUP BY b.pg_id, s.sharing_type";
 		return jdbc.query(sql, p, (rs, i) -> new SharingRow(rs.getLong(1), rs.getString(2), rs.getBigDecimal(3),
 				rs.getBigDecimal(4), rs.getInt(5), rs.getInt(6),
-				rs.getDate(7) == null ? null : rs.getDate(7).toLocalDate()));
+				rs.getDate(7) == null ? null : rs.getDate(7).toLocalDate(),
+				rs.getBigDecimal(8), rs.getBigDecimal(9)));
 	}
 
 	// ---- SQL fragments ----

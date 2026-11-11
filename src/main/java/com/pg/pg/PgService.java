@@ -17,6 +17,7 @@ import com.pg.lookup.LookupService;
 import com.pg.user.Role;
 import com.pg.user.UserEntity;
 import com.pg.user.UserRepository;
+import com.pg.dashboard.DashboardCache;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -69,10 +70,11 @@ public class PgService {
 	private final OwnerPgAccess ownerPgs;
 	private final LookupService lookups;
 	private final PropertyConfigurationService propertyConfig;
+	private final DashboardCache dashboardCache;
 
 	public PgService(PgRepository pgs, UserRepository users, ExpenseCategoryRepository categories,
 			PasswordEncoder encoder, OwnerPgAccess ownerPgs, LookupService lookups,
-			PropertyConfigurationService propertyConfig) {
+			PropertyConfigurationService propertyConfig, DashboardCache dashboardCache) {
 		this.lookups = lookups;
 		this.propertyConfig = propertyConfig;
 		this.pgs = pgs;
@@ -80,6 +82,7 @@ public class PgService {
 		this.categories = categories;
 		this.encoder = encoder;
 		this.ownerPgs = ownerPgs;
+		this.dashboardCache = dashboardCache;
 	}
 
 	@Transactional
@@ -175,7 +178,7 @@ public class PgService {
 	}
 
 	public PgResponse getProfile(Long id) {
-		return toResponse(get(id));
+		return dashboardCache.profile(id, () -> toResponse(get(id)));
 	}
 
 	@Transactional
@@ -202,7 +205,9 @@ public class PgService {
 		PgLocation.apply(pg, req.latitude(), req.longitude(), req.locality(), req.subLocality(), req.pincode(),
 				req.country());
 		if (req.amenityCodes() != null) propertyConfig.applyAmenities(pg, req.amenityCodes());
-		return toResponse(pgs.save(pg));
+		PgResponse updated = toResponse(pgs.save(pg));
+		dashboardCache.evictProfile(id);
+		return updated;
 	}
 
 	private Pg get(Long id) {

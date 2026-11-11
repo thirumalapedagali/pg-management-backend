@@ -25,6 +25,9 @@ import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
 import com.pg.registration.PropertyRegistrationService;
 import com.pg.registration.RegistrationStatus;
+import com.pg.resident.Resident;
+import com.pg.resident.ResidentRepository;
+import com.pg.resident.ResidentStatus;
 import com.pg.security.JwtService;
 import com.pg.security.JwtService.TokenData;
 import com.pg.user.Role;
@@ -56,15 +59,17 @@ public class AuthController {
 	private final JwtService jwt;
 	private final OwnerPgAccess access;
 	private final PropertyRegistrationService registrations;
+	private final ResidentRepository residents;
 
 	public AuthController(UserRepository users, PgRepository pgs, PasswordEncoder encoder, JwtService jwt,
-			OwnerPgAccess access, PropertyRegistrationService registrations) {
+			OwnerPgAccess access, PropertyRegistrationService registrations, ResidentRepository residents) {
 		this.registrations = registrations;
 		this.users = users;
 		this.pgs = pgs;
 		this.encoder = encoder;
 		this.jwt = jwt;
 		this.access = access;
+		this.residents = residents;
 	}
 
 	public record LoginRequest(@NotBlank String username, @NotBlank String password) {
@@ -99,8 +104,14 @@ public class AuthController {
 			return new LoginResponse(jwt.issue(user, null), user.getRole(), user.getId(), user.getUsername(), null, null,
 					null, null, true, options, user.isMustChangePassword());
 		}
-		if (user.getRole() == Role.RESIDENT && user.getPgId() == null) {
-			throw new ForbiddenException("You can sign in once a stay is allotted to you. Until then, browse stays from the sign-in screen.");
+		if (user.getRole() == Role.RESIDENT) {
+			if (user.getResidentId() == null || user.getPgId() == null) {
+				throw new ForbiddenException("You can sign in once a stay is allotted to you. Until then, browse stays from the sign-in screen.");
+			}
+			Resident residentEntity = residents.findById(user.getResidentId()).orElse(null);
+			if (residentEntity == null || residentEntity.getStatus() == ResidentStatus.CHECKED_OUT) {
+				throw new ForbiddenException("Your stay at this property has ended. You can sign in once a new stay is allotted to you.");
+			}
 		}
 		Pg pg = requireValidPg(user);
 		return new LoginResponse(jwt.issue(user, pg.getId()), user.getRole(), user.getId(), user.getUsername(),
@@ -159,6 +170,15 @@ public class AuthController {
 		UserEntity user = users.findById(data.userId()).orElseThrow(() -> new UnauthorizedException("Invalid token"));
 		if (user.getStatus() != Status.ACTIVE || user.getRole() != data.role()) {
 			throw new UnauthorizedException("Invalid token");
+		}
+		if (user.getRole() == Role.RESIDENT) {
+			if (user.getResidentId() == null || user.getPgId() == null) {
+				throw new UnauthorizedException("Invalid token");
+			}
+			Resident residentEntity = residents.findById(user.getResidentId()).orElse(null);
+			if (residentEntity == null || residentEntity.getStatus() == ResidentStatus.CHECKED_OUT) {
+				throw new UnauthorizedException("Invalid token");
+			}
 		}
 		Long pgId = data.pgId();
 		if (user.getRole() == Role.SUPER_ADMIN) {

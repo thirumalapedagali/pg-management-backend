@@ -6,6 +6,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Supplier;
 
+import com.pg.room.Room;
+import com.pg.room.RoomRepository;
+import com.pg.room.RoomSection;
+import com.pg.room.RoomSectionRepository;
+import com.pg.room.Bed;
+import com.pg.room.BedRepository;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -30,6 +37,9 @@ public class PushService {
 	private final com.pg.resident.ResidentRepository residents;
 	private final com.pg.user.UserRepository users;
 	private final com.pg.notification.WhatsAppService whatsApp;
+	private final RoomRepository rooms;
+	private final RoomSectionRepository sections;
+	private final BedRepository beds;
 	private final ExecutorService executor = Executors.newFixedThreadPool(2, r -> {
 		Thread t = new Thread(r, "push-sender");
 		t.setDaemon(true);
@@ -38,12 +48,59 @@ public class PushService {
 
 	public PushService(FcmSender sender, DeviceTokenRepository tokens,
 			com.pg.resident.ResidentRepository residents, com.pg.user.UserRepository users,
-			com.pg.notification.WhatsAppService whatsApp) {
+			com.pg.notification.WhatsAppService whatsApp, RoomRepository rooms,
+			RoomSectionRepository sections, BedRepository beds) {
 		this.sender = sender;
 		this.tokens = tokens;
 		this.residents = residents;
 		this.users = users;
 		this.whatsApp = whatsApp;
+		this.rooms = rooms;
+		this.sections = sections;
+		this.beds = beds;
+	}
+
+	public String formatResidentDetails(Long pgId, Long residentId) {
+		if (residentId == null) {
+			return "";
+		}
+		com.pg.resident.Resident r = residents.findByPgIdAndId(pgId, residentId).orElse(null);
+		return formatResidentDetails(pgId, r);
+	}
+
+	public String formatResidentDetails(Long pgId, com.pg.resident.Resident r) {
+		if (r == null) {
+			return "";
+		}
+		StringBuilder sb = new StringBuilder();
+		sb.append(r.getName());
+		if (r.getRoomId() != null) {
+			Room room = rooms.findByPgIdAndId(pgId, r.getRoomId()).orElse(null);
+			if (room != null) {
+				sb.append(" (Room ").append(room.getNumber());
+				if (r.getSectionId() != null) {
+					RoomSection sec = sections.findByPgIdAndId(pgId, r.getSectionId()).orElse(null);
+					if (sec != null && !"Main Room".equals(sec.getSectionName())) {
+						sb.append(" · ").append(sec.getSectionName());
+					}
+				}
+				if (r.getBedId() != null) {
+					Bed bed = beds.findByPgIdAndId(pgId, r.getBedId()).orElse(null);
+					if (bed != null) {
+						sb.append(" · Bed ").append(bed.getBedNumber());
+					}
+				}
+				sb.append(")");
+			}
+		}
+		return sb.toString();
+	}
+
+	public boolean hasTokensForResident(Long pgId, Long residentId) {
+		if (residentId == null) {
+			return false;
+		}
+		return !tokens.tokensForResident(pgId, residentId).isEmpty();
 	}
 
 	/** Everyone living in the property who has a login. */

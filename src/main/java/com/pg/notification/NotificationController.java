@@ -67,9 +67,12 @@ public class NotificationController {
 		String pgName = pg != null ? pg.getName() : "PG Management";
 		String pgPhone = pg != null ? pg.getMobile() : null;
 
-		whatsAppService.sendDueReminder(pgId, pgName, resident.getName(), resident.getPhone(),
-				room != null ? room.getNumber() : "-", due, pgPhone);
-		pushDue(pgId, pgName, resident.getId(), due);
+		if (push.hasTokensForResident(pgId, residentId)) {
+			pushDue(pgId, pgName, resident.getId(), due);
+		} else {
+			whatsAppService.sendDueReminder(pgId, pgName, resident.getName(), resident.getPhone(),
+					room != null ? room.getNumber() : "-", due, pgPhone);
+		}
 	}
 
 	private void pushDue(Long pgId, String pgName, Long residentId, BigDecimal due) {

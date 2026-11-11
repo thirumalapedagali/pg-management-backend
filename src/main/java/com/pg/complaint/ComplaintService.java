@@ -116,6 +116,12 @@ public class ComplaintService {
 		Complaint saved = complaints.save(c);
 
 		notifyOwner(pgId, resident, saved, categoryLabel);
+		try {
+			push.toStaff(pgId, "New Complaint", "A new " + categoryLabel + " complaint has been raised by " + push.formatResidentDetails(pgId, resident) + ": \"" + saved.getTitle() + "\".",
+					java.util.Map.of("type", "COMPLAINT"));
+		} catch (Exception e) {
+			log.warn("Failed to send complaint push notification to staff: {}", e.getMessage());
+		}
 		return toResponses(pgId, List.of(saved)).get(0);
 	}
 

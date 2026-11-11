@@ -16,7 +16,7 @@ public final class StayDtos {
 	/** One kind of bed (e.g. "2 Sharing") a property offers, over the beds that matched the filters. */
 	public record SharingOption(SharingType sharingType, String label, BigDecimal rentPerMonth,
 			BigDecimal maxRentPerMonth, int availableBeds, int upcomingBeds,
-			LocalDate availableFrom) {
+			LocalDate availableFrom, BigDecimal depositPerMonth) {
 	}
 
 	public record StayCard(Long propertyId, String propertyName, String stayType, String genderType, String address,

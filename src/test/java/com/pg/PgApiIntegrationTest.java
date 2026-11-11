@@ -607,6 +607,7 @@ class PgApiIntegrationTest {
 		long roomId = call("POST", "/api/rooms", o, "{\"number\":\"N1\",\"capacity\":1,\"rent\":5000}").body().get("id").asLong();
 		long residentId = call("POST", "/api/residents", o, "{\"name\":\"Leaver\",\"phone\":\"9000000102\",\"aadhaar\":\"123456789012\",\"roomId\":" + roomId
 				+ ",\"joinedOn\":\"" + LocalDate.now() + "\"}").body().get("id").asLong();
+		assertThat(call("POST", "/api/payments", o, "{\"residentId\":" + residentId + ",\"amount\":5000}").status()).isEqualTo(200);
 		String res = login("9000000102", "9012");
 		String leaveOn = LocalDate.now().plusDays(30).toString();
 

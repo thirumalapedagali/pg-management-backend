@@ -167,7 +167,7 @@ public class StayService {
 		rows.stream().sorted(Comparator.comparing(SharingRow::minRent)).forEach(r -> {
 			SharingType t = SharingType.valueOf(r.sharingType());
 			merged.put(r.sharingType(), new SharingOption(t, label(t), r.minRent(), r.maxRent(), r.available(),
-					r.upcoming(), r.availableFrom()));
+					r.upcoming(), r.availableFrom(), r.minDeposit()));
 		});
 		return List.copyOf(merged.values());
 	}

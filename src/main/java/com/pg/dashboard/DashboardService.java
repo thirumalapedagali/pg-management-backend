@@ -27,6 +27,8 @@ import com.pg.room.Bed;
 import com.pg.room.BedRepository;
 import com.pg.room.Room;
 import com.pg.room.RoomRepository;
+import com.pg.room.RoomSection;
+import com.pg.room.RoomSectionRepository;
 import com.pg.pg.OwnerPgAccess;
 import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
@@ -42,25 +44,26 @@ public class DashboardService {
 	public record MonthPoint(String month, BigDecimal collected, BigDecimal spent) {
 	}
 
-	public record DueItem(Long residentId, String name, String roomNumber, BigDecimal due) {
+	public record DueItem(Long residentId, String name, String roomNumber, String sectionName, String bedNumber, BigDecimal due,
+			LocalDate joinedOn, LocalDate lastPaymentDate) {
 	}
 
 	/** One property's share of a consolidated ("all properties") summary. */
 	public record PropertySummary(Long pgId, String name, String city, int rooms, int beds, int occupied, int vacant,
-			BigDecimal collectedMonth, BigDecimal spentMonth, BigDecimal totalDue) {
+			BigDecimal collectedMonth, BigDecimal spentMonth, BigDecimal totalDue, BigDecimal totalRefundableDeposit) {
 	}
 
 	/** {@code properties} is only filled for the consolidated view. */
 	public record Summary(PeriodTotals collections, PeriodTotals expenses, PeriodTotals net, int rooms, int beds,
-			int occupied, int vacant, int residents, BigDecimal totalDue, List<MonthPoint> months,
+			int occupied, int vacant, int residents, BigDecimal totalDue, BigDecimal totalRefundableDeposit, List<MonthPoint> months,
 			List<DueItem> pendingDues, int checkInsToday, int checkInsMonth, List<PropertySummary> properties) {
 	}
 
-	public record TodayCheckIn(Long residentId, String name, String roomNumber, String bedNumber, Long pgId,
+	public record TodayCheckIn(Long residentId, String name, String roomNumber, String sectionName, String bedNumber, Long pgId,
 			String pgName) {
 	}
 
-	public record TodayPayment(Long id, Long residentId, String residentName, String roomNumber, String bedNumber,
+	public record TodayPayment(Long id, Long residentId, String residentName, String roomNumber, String sectionName, String bedNumber,
 			BigDecimal amount, Long pgId, String pgName) {
 	}
 
@@ -78,19 +81,21 @@ public class DashboardService {
 	private final ResidentRepository residents;
 	private final ResidentService residentService;
 	private final BedRepository beds;
+	private final RoomSectionRepository sections;
 	private final AppClock clock;
 	private final PgRepository pgs;
 	private final UserRepository users;
 	private final OwnerPgAccess access;
 
 	public DashboardService(PaymentRepository payments, ExpenseRepository expenses, RoomRepository rooms,
-			ResidentRepository residents, ResidentService residentService, BedRepository beds, AppClock clock,
+			ResidentRepository residents, ResidentService residentService, BedRepository beds, RoomSectionRepository sections, AppClock clock,
 			PgRepository pgs, UserRepository users, OwnerPgAccess access, DashboardCache cache) {
 		this.cache = cache;
 		this.pgs = pgs;
 		this.users = users;
 		this.access = access;
 		this.beds = beds;
+		this.sections = sections;
 		this.payments = payments;
 		this.expenses = expenses;
 		this.rooms = rooms;
@@ -140,12 +145,13 @@ public class DashboardService {
 			Pg pg = owned.get(i);
 			Summary p = parts.get(i);
 			properties.add(new PropertySummary(pg.getId(), pg.getName(), pg.getCity(), p.rooms(), p.beds(), p.occupied(),
-					p.vacant(), p.collections().month(), p.expenses().month(), p.totalDue()));
+					p.vacant(), p.collections().month(), p.expenses().month(), p.totalDue(), p.totalRefundableDeposit()));
 		}
 		int occupied = parts.stream().mapToInt(Summary::occupied).sum();
+		BigDecimal totalRefundableDeposit = parts.stream().map(Summary::totalRefundableDeposit).reduce(BigDecimal.ZERO, BigDecimal::add);
 		return new Summary(collections, spent, collections.minus(spent), parts.stream().mapToInt(Summary::rooms).sum(),
 				parts.stream().mapToInt(Summary::beds).sum(), occupied, parts.stream().mapToInt(Summary::vacant).sum(),
-				occupied, pending.stream().map(DueItem::due).reduce(BigDecimal.ZERO, BigDecimal::add), months, pending,
+				occupied, pending.stream().map(DueItem::due).reduce(BigDecimal.ZERO, BigDecimal::add), totalRefundableDeposit, months, pending,
 				parts.stream().mapToInt(Summary::checkInsToday).sum(),
 				parts.stream().mapToInt(Summary::checkInsMonth).sum(), properties);
 	}
@@ -198,7 +204,11 @@ public class DashboardService {
 		int occupied = residentList.size();
 		List<DueItem> pending = residentList.stream().filter(r -> r.due().signum() > 0)
 				.sorted(Comparator.comparing(ResidentResponse::due).reversed())
-				.map(r -> new DueItem(r.id(), r.name(), r.roomNumber(), r.due())).toList();
+				.map(r -> {
+					LocalDate lastPaymentDate = payments.findByPgIdAndResidentIdOrderByDateDescIdDesc(pgId, r.id())
+							.stream().findFirst().map(com.pg.payment.Payment::getDate).orElse(null);
+					return new DueItem(r.id(), r.name(), r.roomNumber(), r.sectionName(), r.bedNumber(), r.due(), r.joinedOn(), lastPaymentDate);
+				}).toList();
 		BigDecimal totalDue = pending.stream().map(DueItem::due).reduce(BigDecimal.ZERO, BigDecimal::add);
 
 		List<MonthPoint> months = new ArrayList<>();
@@ -213,8 +223,10 @@ public class DashboardService {
 		int checkInsToday = (int) joinDates.stream().filter(today::equals).count();
 		int checkInsMonth = (int) joinDates.stream().filter(d -> YearMonth.from(d).equals(current)).count();
 
+		BigDecimal totalRefundableDeposit = residents.totalRefundableDeposit(pgId);
+
 		return new Summary(collections, spent, collections.minus(spent), roomCount, beds, occupied,
-				Math.max(0, beds - occupied), occupied, totalDue, months, pending, checkInsToday, checkInsMonth, null);
+				Math.max(0, beds - occupied), occupied, totalDue, totalRefundableDeposit, months, pending, checkInsToday, checkInsMonth, null);
 	}
 
 	public Today today() {
@@ -245,6 +257,8 @@ public class DashboardService {
 				.collect(Collectors.toMap(r -> r.getId(), Function.identity(), (a, b) -> a));
 		Map<Long, String> roomNumbers = rooms.findByPgIdOrderByNumber(pgId).stream()
 				.collect(Collectors.toMap(Room::getId, Room::getNumber, (a, b) -> a));
+		Map<Long, String> sectionNames = sections.findByPgIdOrderBySectionName(pgId).stream()
+				.collect(Collectors.toMap(RoomSection::getId, RoomSection::getSectionName, (a, b) -> a));
 		Map<Long, String> bedNumbers = beds.findByPgIdOrderByBedNumber(pgId).stream()
 				.collect(Collectors.toMap(Bed::getId, Bed::getBedNumber, (a, b) -> a));
 		List<TodayPayment> pay = payments.findByPgIdAndDateBetweenOrderByDateDescIdDesc(pgId, today, today).stream()
@@ -252,6 +266,7 @@ public class DashboardService {
 					com.pg.resident.Resident r = byId.get(p.getResidentId());
 					return new TodayPayment(p.getId(), p.getResidentId(), r == null ? "Removed resident" : r.getName(),
 							r == null ? null : roomNumbers.get(r.getRoomId()),
+							r == null || r.getSectionId() == null ? null : sectionNames.get(r.getSectionId()),
 							r == null || r.getBedId() == null ? null : bedNumbers.get(r.getBedId()), p.getAmount(),
 							pgId, pgName);
 				})
@@ -264,6 +279,7 @@ public class DashboardService {
 		BigDecimal spent = exp.stream().map(TodayExpense::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
 		List<TodayCheckIn> checkIns = byId.values().stream().filter(r -> today.equals(r.getJoinedOn()))
 				.map(r -> new TodayCheckIn(r.getId(), r.getName(), roomNumbers.get(r.getRoomId()),
+						r.getSectionId() == null ? null : sectionNames.get(r.getSectionId()),
 						r.getBedId() == null ? null : bedNumbers.get(r.getBedId()), pgId, pgName))
 				.toList();
 		return new Today(today, collected, spent, collected.subtract(spent), pay, exp, checkIns);

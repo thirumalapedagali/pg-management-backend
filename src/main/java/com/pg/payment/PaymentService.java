@@ -99,7 +99,7 @@ public class PaymentService {
 				"We received Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " on "+ saved.getDate() + ". Thank you!",
 				java.util.Map.of("type", "PAYMENT"));
 		try {
-			push.toStaff(pgId, "Payment Update", "Payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " recorded for " + resident.getName() + ".");
+			push.toStaff(pgId, "Payment Update", "Payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " recorded for " + push.formatResidentDetails(pgId, resident) + ".");
 		} catch (Exception e) {
 			log.warn("Failed to send payment push notification to staff: {}", e.getMessage());
 		}
@@ -142,9 +142,8 @@ public class PaymentService {
 			push.toResident(pgId, residentId, "Payment Submitted",
 					"Your payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + " on " + saved.getDate() + " has been submitted successfully.",
 					java.util.Map.of("type", "PAYMENT"));
-			Room room = rooms.findByPgIdAndId(pgId, resident.getRoomId()).orElse(null);
 			push.toStaff(pgId, "New Payment Alert",
-					resident.getName() + " from Room " + (room != null ? room.getNumber() : "-") + " submitted a payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + ".");
+					push.formatResidentDetails(pgId, resident) + " submitted a payment of Rs. " + saved.getAmount().stripTrailingZeros().toPlainString() + ".");
 		} catch (Exception e) {
 			log.warn("Failed to send payment push notifications: {}", e.getMessage());
 		}

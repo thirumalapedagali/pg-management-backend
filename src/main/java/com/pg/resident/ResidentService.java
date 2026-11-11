@@ -8,6 +8,9 @@ import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.pg.billing.Billing;
 import com.pg.common.AppClock;
 import com.pg.common.BadRequestException;
+import com.pg.common.Paged;
 import com.pg.common.NotFoundException;
 import com.pg.notification.WhatsAppService;
 import com.pg.push.PushService;
@@ -78,9 +82,17 @@ public class ResidentService {
 			LocalDate checkOutDate, java.time.LocalDateTime checkInTime, java.time.LocalDateTime checkOutTime,
 			int daysStayed, Double hoursStayed,
 			LocalDate joinedOn, BigDecimal rent, BigDecimal baseRent, List<RentChangeInfo> rentChanges,
-			BigDecimal securityDeposit, BigDecimal billed, BigDecimal paid, BigDecimal due,
+			BigDecimal securityDeposit, BigDecimal returnedDeposit, BigDecimal billed, BigDecimal paid, BigDecimal due,
 			ResidentStatus status, NoticeStatus noticeStatus, LocalDate noticeGivenOn, LocalDate vacateOn,
-			String noticeReason, String photoUrl) {
+			String noticeReason, String photoUrl, String attachmentUrl) {
+	}
+
+	public record ResidentSummaryResponse(
+			long totalResidents,
+			BigDecimal totalRent,
+			BigDecimal totalDue,
+			long withDues,
+			long paidCount) {
 	}
 
 	/** Minimum days between giving notice and leaving. */
@@ -134,6 +146,7 @@ public class ResidentService {
 
 	/** Same as {@link #list(String)} for an explicit PG, so callers need not switch the tenant context. */
 	public List<ResidentResponse> list(Long pgId, String statusFilter) {
+		checkAutoCheckouts(pgId);
 		Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
 				.collect(Collectors.toMap(Room::getId, Function.identity()));
 		Map<Long, RoomSection> sectionById = sections.findByPgIdOrderBySectionName(pgId).stream()
@@ -167,6 +180,132 @@ public class ResidentService {
 						paid.getOrDefault(r.getId(), BigDecimal.ZERO),
 						changesByResident.getOrDefault(r.getId(), List.of()), photos.get(r.getId())))
 				.toList();
+	}
+
+	public Paged<ResidentResponse> listPaged(String statusFilter, String search, String filter, String floor, int page, int size) {
+		return listPaged(TenantContext.requirePgId(), statusFilter, search, filter, floor, page, size);
+	}
+
+	public Paged<ResidentResponse> listPaged(Long pgId, String statusFilter, String search, String filter, String floor, int page, int size) {
+		checkAutoCheckouts(pgId);
+		ResidentStatus status = null;
+		if (!"ALL".equalsIgnoreCase(statusFilter)) {
+			if ("CHECKED_OUT".equalsIgnoreCase(statusFilter) || "EX".equalsIgnoreCase(statusFilter)) {
+				status = ResidentStatus.CHECKED_OUT;
+			} else {
+				status = ResidentStatus.ACTIVE;
+			}
+		}
+
+		Pageable pageable = PageRequest.of(page, size);
+
+		if ("WITH_DUES".equalsIgnoreCase(filter) || "PAID_UP".equalsIgnoreCase(filter)) {
+			List<Resident> matchedResidents = residents.searchResidentsList(pgId, status, floor, search);
+
+			Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
+					.collect(Collectors.toMap(Room::getId, Function.identity()));
+			Map<Long, BigDecimal> paid = new java.util.HashMap<>();
+			for (Object[] row : payments.sumByResident(pgId)) {
+				paid.put((Long) row[0], (BigDecimal) row[1]);
+			}
+			Map<Long, List<ResidentRentChange>> changesByResident = rentChanges.findByPgIdOrderByEffectiveFrom(pgId).stream()
+					.collect(Collectors.groupingBy(ResidentRentChange::getResidentId));
+
+			List<Resident> filtered = matchedResidents.stream().filter(r -> {
+				BigDecimal billed = billing.billed(r, roomById.get(r.getRoomId()), changesByResident.getOrDefault(r.getId(), List.of()));
+				BigDecimal due = Billing.due(billed, paid.getOrDefault(r.getId(), BigDecimal.ZERO));
+				if ("WITH_DUES".equalsIgnoreCase(filter)) {
+					return due.compareTo(BigDecimal.ZERO) > 0;
+				} else {
+					return due.compareTo(BigDecimal.ZERO) == 0;
+				}
+			}).toList();
+
+			long totalElements = filtered.size();
+			int totalPages = (int) Math.ceil((double) totalElements / size);
+
+			int fromIndex = page * size;
+			if (fromIndex >= totalElements) {
+				return new Paged<>(List.of(), page, size, totalElements, totalPages);
+			}
+			int toIndex = Math.min(fromIndex + size, (int) totalElements);
+			List<Resident> pagedContent = filtered.subList(fromIndex, toIndex);
+
+			List<ResidentResponse> responses = mapToResponses(pgId, pagedContent);
+			return new Paged<>(responses, page, size, totalElements, totalPages);
+		} else {
+			Page<Resident> pagedResult = residents.searchResidentsPaged(pgId, status, floor, search, pageable);
+			List<ResidentResponse> responses = mapToResponses(pgId, pagedResult.getContent());
+			return new Paged<>(responses, pagedResult.getNumber(), pagedResult.getSize(), pagedResult.getTotalElements(), pagedResult.getTotalPages());
+		}
+	}
+
+	private List<ResidentResponse> mapToResponses(Long pgId, List<Resident> resList) {
+		Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
+				.collect(Collectors.toMap(Room::getId, Function.identity()));
+		Map<Long, RoomSection> sectionById = sections.findByPgIdOrderBySectionName(pgId).stream()
+				.collect(Collectors.toMap(RoomSection::getId, Function.identity()));
+		Map<Long, Bed> bedById = beds.findByPgIdOrderByBedNumber(pgId).stream()
+				.collect(Collectors.toMap(Bed::getId, Function.identity()));
+		Map<Long, RoomSharingOption> optionById = sharingOptions.findByPgIdOrderByCapacity(pgId).stream()
+				.collect(Collectors.toMap(RoomSharingOption::getId, Function.identity()));
+		Map<Long, BigDecimal> paid = new java.util.HashMap<>();
+		for (Object[] row : payments.sumByResident(pgId)) {
+			paid.put((Long) row[0], (BigDecimal) row[1]);
+		}
+		Map<Long, List<ResidentRentChange>> changesByResident = rentChanges.findByPgIdOrderByEffectiveFrom(pgId).stream()
+				.collect(Collectors.groupingBy(ResidentRentChange::getResidentId));
+
+		Map<Long, String> photos = media.residentPhotos(pgId);
+
+		return resList.stream()
+				.map(r -> toResponse(r, roomById.get(r.getRoomId()),
+						r.getSectionId() != null ? sectionById.get(r.getSectionId()) : null,
+						r.getBedId() != null ? bedById.get(r.getBedId()) : null,
+						r.getSharingOptionId() != null ? optionById.get(r.getSharingOptionId()) : null,
+						paid.getOrDefault(r.getId(), BigDecimal.ZERO),
+						changesByResident.getOrDefault(r.getId(), List.of()), photos.get(r.getId())))
+				.toList();
+	}
+
+	public ResidentSummaryResponse getSummary() {
+		return getSummary(TenantContext.requirePgId());
+	}
+
+	public ResidentSummaryResponse getSummary(Long pgId) {
+		checkAutoCheckouts(pgId);
+		long totalResidents = residents.countByPgIdAndStatus(pgId,ResidentStatus.ACTIVE);
+		List<Resident> resList = residents.findByPgIdAndStatusOrderByName(pgId, ResidentStatus.ACTIVE);
+
+		Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
+				.collect(Collectors.toMap(Room::getId, Function.identity()));
+		Map<Long, BigDecimal> paid = new java.util.HashMap<>();
+		for (Object[] row : payments.sumByResident(pgId)) {
+			paid.put((Long) row[0], (BigDecimal) row[1]);
+		}
+		Map<Long, List<ResidentRentChange>> changesByResident = rentChanges.findByPgIdOrderByEffectiveFrom(pgId).stream()
+				.collect(Collectors.groupingBy(ResidentRentChange::getResidentId));
+
+		BigDecimal totalRent = BigDecimal.ZERO;
+		BigDecimal totalDue = BigDecimal.ZERO;
+		long withDues = 0;
+		long paidCount = 0;
+
+		for (Resident r : resList) {
+			Room room = roomById.get(r.getRoomId());
+			List<ResidentRentChange> changes = changesByResident.getOrDefault(r.getId(), List.of());
+			totalRent = totalRent.add(billing.currentRent(r, room, changes));
+			BigDecimal billed = billing.billed(r, room, changes);
+			BigDecimal due = Billing.due(billed, paid.getOrDefault(r.getId(), BigDecimal.ZERO));
+			totalDue = totalDue.add(due);
+			if (due.compareTo(BigDecimal.ZERO) > 0) {
+				withDues++;
+			} else {
+				paidCount++;
+			}
+		}
+
+		return new ResidentSummaryResponse(totalResidents, totalRent, totalDue, withDues, paidCount);
 	}
 
 	public ResidentResponse get(Long id) {
@@ -500,11 +639,16 @@ public class ResidentService {
 	/** Vacates / checks out a resident: verifies zero pending dues, releases bed, and marks CHECKED_OUT. */
 	@Transactional
 	public ResidentResponse vacate(Long id, LocalDate checkOutDate) {
-		return vacate(id, checkOutDate, null);
+		return vacate(id, checkOutDate, null, null);
 	}
 
 	@Transactional
 	public ResidentResponse vacate(Long id, LocalDate checkOutDate, java.time.LocalDateTime checkOutTime) {
+		return vacate(id, checkOutDate, checkOutTime, null);
+	}
+
+	@Transactional
+	public ResidentResponse vacate(Long id, LocalDate checkOutDate, java.time.LocalDateTime checkOutTime, BigDecimal returnedDeposit) {
 		Long pgId = TenantContext.requirePgId();
 		Resident r = find(id);
 
@@ -551,6 +695,7 @@ public class ResidentService {
 		r.setCheckOutDate(outDate);
 		r.setCheckOutTime(outDateTime);
 		r.setStatus(ResidentStatus.CHECKED_OUT);
+		r.setReturnedDeposit(returnedDeposit != null ? returnedDeposit : BigDecimal.ZERO);
 		clearNotice(r);
 		r = residents.save(r);
 
@@ -571,6 +716,15 @@ public class ResidentService {
 		if (r.getNoticeStatus() == NoticeStatus.REQUESTED || r.getNoticeStatus() == NoticeStatus.APPROVED) {
 			throw new BadRequestException("A notice to vacate is already in place. Cancel it first to change the date.");
 		}
+
+		Room room = rooms.findByPgIdAndId(r.getPgId(), r.getRoomId()).orElse(null);
+		List<ResidentRentChange> rc = billing.changesFor(r);
+		BigDecimal billed = room == null ? BigDecimal.ZERO : billing.billed(r, room, rc);
+		BigDecimal paid = payments.sumForResident(r.getPgId(), r.getId());
+		BigDecimal due = Billing.due(billed, paid);
+		if (due.signum() > 0) {
+			throw new BadRequestException("Cannot submit a vacate notice. You have outstanding dues of ₹" + due.toPlainString() + ". Please clear all dues first.");
+		}
 		if (vacateOn == null) {
 			throw new BadRequestException("Choose the date you will leave");
 		}
@@ -586,7 +740,7 @@ public class ResidentService {
 		residents.save(r);
 
 		try {
-			push.toStaff(r.getPgId(), "New Vacate Request", r.getName() + " has requested to vacate on " + vacateOn + ".");
+			push.toStaff(r.getPgId(), "New Vacate Request", push.formatResidentDetails(r.getPgId(), r) + " has requested to vacate on " + vacateOn + ".");
 			push.toResident(r.getPgId(), r.getId(), "Vacate Request Submitted", "Your request to vacate on " + vacateOn + " has been submitted successfully.");
 		} catch (Exception e) {
 			log.warn("Failed to send vacate request push notification: {}", e.getMessage());
@@ -611,7 +765,7 @@ public class ResidentService {
 		residents.save(r);
 
 		try {
-			push.toStaff(r.getPgId(), "Vacate Notice Cancelled", r.getName() + " has cancelled their notice to vacate.");
+			push.toStaff(r.getPgId(), "Vacate Notice Cancelled", push.formatResidentDetails(r.getPgId(), r) + " has cancelled their notice to vacate.");
 			push.toResident(r.getPgId(), r.getId(), "Vacate Notice Cancelled", "Your notice to vacate has been successfully cancelled.");
 		} catch (Exception e) {
 			log.warn("Failed to send vacate cancel push notification: {}", e.getMessage());
@@ -623,11 +777,19 @@ public class ResidentService {
 	/** Owner accepts or declines a requested notice. Once approved the bed is advertised as available from the date. */
 	@Transactional
 	public ResidentResponse decideNotice(Long id, boolean approve) {
+		return decideNotice(id, approve, null);
+	}
+
+	@Transactional
+	public ResidentResponse decideNotice(Long id, boolean approve, BigDecimal returnedDeposit) {
 		Resident r = find(id);
 		if (r.getNoticeStatus() != NoticeStatus.REQUESTED) {
 			throw new BadRequestException("This resident has no pending notice request");
 		}
 		r.setNoticeStatus(approve ? NoticeStatus.APPROVED : NoticeStatus.REJECTED);
+		if (approve) {
+			r.setReturnedDeposit(returnedDeposit != null ? returnedDeposit : BigDecimal.ZERO);
+		}
 		residents.save(r);
 
 		try {
@@ -637,7 +799,42 @@ public class ResidentService {
 			log.warn("Failed to send vacate decision push notification: {}", e.getMessage());
 		}
 
+		if (approve && r.getVacateOn() != null && !r.getVacateOn().isAfter(clock.today())) {
+			autoCheckout(r);
+		}
+
 		return get(id);
+	}
+
+	@Transactional
+	public void autoCheckout(Resident r) {
+		if (r.getStatus() == ResidentStatus.CHECKED_OUT) {
+			return;
+		}
+		if (r.getBedId() != null) {
+			beds.findById(r.getBedId()).ifPresent(oldBed -> {
+				oldBed.setStatus(BedStatus.VACANT);
+				oldBed.setResidentId(null);
+				beds.save(oldBed);
+			});
+			r.setBedId(null);
+		}
+		r.setCheckOutDate(r.getVacateOn() != null ? r.getVacateOn() : clock.today());
+		r.setCheckOutTime(r.getCheckOutDate().atTime(12, 0));
+		r.setStatus(ResidentStatus.CHECKED_OUT);
+		clearNotice(r);
+		residents.save(r);
+	}
+
+	@Transactional
+	public void checkAutoCheckouts(Long pgId) {
+		List<Resident> approved = residents.findByPgIdAndStatusAndNoticeStatus(pgId, ResidentStatus.ACTIVE, NoticeStatus.APPROVED);
+		LocalDate today = clock.today();
+		for (Resident r : approved) {
+			if (r.getVacateOn() != null && !r.getVacateOn().isAfter(today)) {
+				autoCheckout(r);
+			}
+		}
 	}
 
 	private static void clearNotice(Resident r) {
@@ -936,9 +1133,9 @@ public class ResidentService {
 				daysStayed, hoursStayed,
 				r.getJoinedOn(), rent, baseRent,
 				rc.stream().map(c -> new RentChangeInfo(c.getEffectiveFrom(), c.getRent())).toList(),
-				deposit, billed, paid, Billing.due(billed, paid),
+				deposit, r.getReturnedDeposit() != null ? r.getReturnedDeposit() : BigDecimal.ZERO, billed, paid, Billing.due(billed, paid),
 				r.getStatus(), r.getNoticeStatus(), r.getNoticeGivenOn(), r.getVacateOn(), r.getNoticeReason(),
-				photoUrl);
+				photoUrl, r.getAttachmentUrl());
 	}
 
 	private BigDecimal currentRent(Resident r, BigDecimal baseRent, List<ResidentRentChange> rc) {
