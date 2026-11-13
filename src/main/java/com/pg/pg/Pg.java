@@ -28,6 +28,9 @@ public class Pg {
 	private String name;
 	private String ownerName;
 	private String mobile;
+	/** Another number residents can reach the property on; optional. */
+	@Column(length = 15)
+	private String alternateMobile;
 	private String email;
 	private String address;
 	private String city;

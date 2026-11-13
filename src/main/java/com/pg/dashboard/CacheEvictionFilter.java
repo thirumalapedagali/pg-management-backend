@@ -37,10 +37,15 @@ public class CacheEvictionFilter extends OncePerRequestFilter {
 					String uri = request.getRequestURI();
 					if (uri.startsWith("/api/admin") || uri.startsWith("/api/public/owner-registrations")) {
 						cache.evictAll();
+					} else if (uri.startsWith("/api/pg/properties")) {
+						// A new property appears in the public list.
+						cache.evictPublic();
 					}
 				} else {
 					cache.evictPg(pgId);
 					cache.evictOwned();
+					// Vacancies, rent, pictures and the profile all show in the public property list.
+					cache.evictPublic();
 					// Rooms / beds only change when a room is edited or a resident is added, moved, vacated,
 					// rejoined, removed or approved from a booking request - not for payments or expenses.
 					String uri = request.getRequestURI();

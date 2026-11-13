@@ -1,11 +1,13 @@
 package com.pg.dashboard;
 
+import java.util.List;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.pg.dashboard.DashboardService.DueItem;
 import com.pg.dashboard.DashboardService.Summary;
 import com.pg.dashboard.DashboardService.Today;
 
@@ -26,6 +28,11 @@ public class DashboardController {
 	@GetMapping("/summary")
 	public Summary summary(@RequestParam(required = false) String scope, Authentication auth) {
 		return "all".equalsIgnoreCase(scope) ? service.summaryAll(auth.getName()) : service.summary();
+	}
+
+	@GetMapping("/pending-dues")
+	public List<DueItem> pendingDues(@RequestParam(required = false) String scope, Authentication auth) {
+		return "all".equalsIgnoreCase(scope) ? service.pendingDuesAll(auth.getName()) : service.pendingDues();
 	}
 
 	@GetMapping("/today")

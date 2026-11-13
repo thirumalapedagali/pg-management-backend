@@ -50,6 +50,37 @@ public class DashboardCache {
 	private final Cache<Long, Object> profiles = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(24))
 			.maximumSize(500).build();
 
+	/** {@code kind "active"}: the active properties of a city filter; {@code kind "summary"}: one property's card. */
+	public record PublicKey(String kind, String city, Long pgId) {
+	}
+
+	/**
+	 * What the public property list is built from. It is the same for every visitor and is hit by every app start, so
+	 * it is built once and reused; only the distance, which depends on the visitor, is worked out per request. Any
+	 * write to a property evicts it ({@link #evictPublic}); the short expiry covers changes the API never sees (a
+	 * notice date arriving, a licence running out).
+	 */
+	private final Cache<PublicKey, Object> publicData = Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(2))
+			.maximumSize(3000).build();
+
+	@SuppressWarnings("unchecked")
+	public <T> T publicData(PublicKey key, Supplier<T> loader) {
+		return (T) publicData.get(key, k -> loader.get());
+	}
+
+	@SuppressWarnings("unchecked")
+	public <T> T publicDataIfPresent(PublicKey key) {
+		return (T) publicData.getIfPresent(key);
+	}
+
+	public void putPublicData(PublicKey key, Object value) {
+		publicData.put(key, value);
+	}
+
+	public void evictPublic() {
+		publicData.invalidateAll();
+	}
+
 	/** Per-property value of the given kind for a day; the loader runs only on a miss (failures are not cached). */
 	@SuppressWarnings("unchecked")
 	public <T> T pg(String kind, Long pgId, LocalDate day, Supplier<T> loader) {
@@ -111,6 +142,7 @@ public class DashboardCache {
 	}
 
 	public void evictAll() {
+		publicData.invalidateAll();
 		pgData.invalidateAll();
 		rooms.invalidateAll();
 		owned.invalidateAll();

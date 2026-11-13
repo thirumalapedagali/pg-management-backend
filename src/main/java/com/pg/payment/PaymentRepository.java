@@ -35,6 +35,9 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 	@Query("select p.residentId, sum(p.amount) from Payment p where p.pgId = :pgId group by p.residentId")
 	List<Object[]> sumByResident(@Param("pgId") Long pgId);
 
+	@Query("select p.residentId, max(p.date) from Payment p where p.pgId = :pgId group by p.residentId")
+	List<Object[]> maxPaymentDateByResident(@Param("pgId") Long pgId);
+
 	@Query("select coalesce(sum(p.amount), 0) from Payment p where p.pgId = :pgId and p.residentId = :residentId")
 	BigDecimal sumForResident(@Param("pgId") Long pgId, @Param("residentId") Long residentId);
 }

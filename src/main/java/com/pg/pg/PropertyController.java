@@ -44,9 +44,11 @@ public class PropertyController {
 
 	public record NewPropertyRequest(@NotBlank @Size(max = 120) String name, String stayType, String address,
 			String city, String state, Integer totalFloors, String genderType, String unitLabel, String locationUrl,
-			String upiId, String upiName, String mobile, java.math.BigDecimal startingPrice, String description,
+			String upiId, String upiName, String mobile,
+			@jakarta.validation.constraints.Pattern(regexp = "|\\d{10,15}", message = "must be 10-15 digits") String alternateMobile,
+			java.math.BigDecimal startingPrice, String description,
 			List<String> amenityCodes, Double latitude, Double longitude, String locality, String subLocality,
-			String pincode, String country) {
+			String pincode, String country, @Size(max = 4000) String rules) {
 	}
 
 	private final UserRepository users;
@@ -91,12 +93,16 @@ public class PropertyController {
 		pg.setName(r.name().trim());
 		pg.setOwnerName(home != null ? home.getOwnerName() : owner.getUsername());
 		pg.setMobile(r.mobile() != null && !r.mobile().isBlank() ? r.mobile().trim() : owner.getMobile());
+		pg.setAlternateMobile(blankToNull(r.alternateMobile()));
 		pg.setEmail(owner.getEmail());
 		pg.setAddress(blankToNull(r.address()));
 		pg.setCity(blankToNull(r.city()));
 		pg.setState(blankToNull(r.state()));
 		pg.setPlan(home != null ? home.getPlan() : null);
-		pg.setTotalFloors(r.totalFloors() != null && r.totalFloors() > 0 ? r.totalFloors() : 3);
+		if (r.totalFloors() == null || r.totalFloors() < 1) {
+			throw new com.pg.common.BadRequestException("Number of floors is required");
+		}
+		pg.setTotalFloors(r.totalFloors());
 		String stay = r.stayType() != null && !r.stayType().isBlank() ? r.stayType().trim().toUpperCase() : "PG";
 		pg.setStayType(stay);
 		pg.setUnitLabel(r.unitLabel() != null && !r.unitLabel().isBlank() ? r.unitLabel().trim()
@@ -106,6 +112,7 @@ public class PropertyController {
 		pg.setUpiName(blankToNull(r.upiName()));
 		pg.setDescription(blankToNull(r.description()));
 		pg.setStartingPrice(r.startingPrice());
+		pg.setRules(blankToNull(r.rules()));
 		PgLocation.apply(pg, r.latitude(), r.longitude(), r.locality(), r.subLocality(), r.pincode(), r.country());
 		pg.setGenderType(r.genderType() != null && !r.genderType().isBlank() ? r.genderType().trim().toUpperCase()
 				: "CO_LIVING");
@@ -115,10 +122,11 @@ public class PropertyController {
 		pg.setLicenseExpiry(home != null && home.getLicenseExpiry() != null ? home.getLicenseExpiry()
 				: LocalDateTime.now().plusMonths(1));
 		pg.setActive(true);
+		pg.setAmenities(String.join(", ", r.amenityCodes()));
 		pg = pgs.save(pg);
-		if (r.amenityCodes() != null) {
-			propertyConfig.applyAmenities(pg, r.amenityCodes());
-		}
+//		if (r.amenityCodes() != null) {
+//			propertyConfig.applyAmenities(pg, r.amenityCodes());
+//		}
 
 		access.link(owner.getId(), pg.getId());
 		for (String name : DEFAULT_CATEGORIES) {

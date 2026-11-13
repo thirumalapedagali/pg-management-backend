@@ -38,11 +38,14 @@ public class RoomService {
 	public record BedRequest(String bedNumber, BedType bedType, BigDecimal customRentOverride) {
 	}
 
-	public record SectionRentRequest(Long sectionId, BigDecimal rentPerBed) {
+	public record SectionRentRequest(Long sectionId, BigDecimal rentPerBed, BigDecimal depositPerBed) {
 	}
 
-	/** Either {@code rent} (room or flat with a single rate) or {@code sections} (rent per bed for each section). */
-	public record RentUpdateRequest(BigDecimal rent, List<SectionRentRequest> sections) {
+	/**
+	 * Either {@code rent} (room or flat with a single rate) or {@code sections} (rent per bed for each section).
+	 * The deposit is optional and, when sent, is changed together with the rent.
+	 */
+	public record RentUpdateRequest(BigDecimal rent, BigDecimal deposit, List<SectionRentRequest> sections) {
 	}
 
 	public record SectionRequest(String sectionName, SharingType sharingType, Integer capacity,
@@ -441,6 +444,14 @@ public class RoomService {
 				if (sec == null) {
 					throw new BadRequestException("Section not found in this room");
 				}
+				if (sr.depositPerBed() != null) {
+					BigDecimal newDeposit = requireDeposit(sr.depositPerBed());
+					sec.setDepositPerBed(newDeposit);
+					sections.save(sec);
+					setOptionDeposit(pgId, id,
+							o -> o.getSharingType() == sec.getSharingType() && o.getCapacity() == sec.getCapacity(),
+							newDeposit);
+				}
 				BigDecimal newRent = requireRent(sr.rentPerBed());
 				BigDecimal oldRent = sec.getRentPerBed();
 				if (oldRent.compareTo(newRent) == 0) {
@@ -463,6 +474,14 @@ public class RoomService {
 		} else {
 			BigDecimal newRent = requireRent(req.rent());
 			RoomSection sec = secList.isEmpty() ? null : secList.get(0);
+			if (req.deposit() != null) {
+				BigDecimal newDeposit = requireDeposit(req.deposit());
+				if (sec != null) {
+					sec.setDepositPerBed(newDeposit);
+					sections.save(sec);
+				}
+				setOptionDeposit(pgId, id, o -> true, newDeposit);
+			}
 			BigDecimal oldRent = sec != null ? sec.getRentPerBed() : oldRoomRent;
 			if (oldRent.compareTo(newRent) != 0 || oldRoomRent.compareTo(newRent) != 0) {
 				room.setRent(newRent);
@@ -484,6 +503,23 @@ public class RoomService {
 		}
 		return rent;
 	}
+
+	private static BigDecimal requireDeposit(BigDecimal deposit) {
+		if (deposit == null || deposit.signum() < 0) {
+			throw new BadRequestException("Deposit must be zero or more");
+		}
+		return deposit;
+	}
+
+	private void setOptionDeposit(Long pgId, Long roomId, Predicate<RoomSharingOption> match, BigDecimal deposit) {
+		for (RoomSharingOption opt : sharingOptions.findByPgIdAndRoomIdOrderByCapacity(pgId, roomId)) {
+			if (match.test(opt)) {
+				opt.setDepositPerBed(deposit);
+				sharingOptions.save(opt);
+			}
+		}
+	}
+
 
 	private void setOptionRent(Long pgId, Long roomId, Predicate<RoomSharingOption> match, BigDecimal rent) {
 		for (RoomSharingOption opt : sharingOptions.findByPgIdAndRoomIdOrderByCapacity(pgId, roomId)) {

@@ -3,6 +3,7 @@ package com.pg.publicapi;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -15,8 +16,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.pg.common.BadRequestException;
+import com.pg.dashboard.DashboardCache;
+import com.pg.dashboard.DashboardCache.PublicKey;
 import com.pg.common.NotFoundException;
+import com.pg.common.Paged;
 import com.pg.pg.Pg;
+import com.pg.pg.PgLocation;
 import com.pg.pg.PgRepository;
 import com.pg.resident.ResidentRepository;
 import com.pg.room.AcType;
@@ -67,8 +73,18 @@ public class PublicPgController {
 			/** Occupied beds whose resident has an approved notice, and the earliest date one of them frees up. */
 			int upcomingBeds,
 			LocalDate availableFrom,
-			List<String> images
+			List<String> images,
+			/** Only when the request sent a position and the property has one saved. */
+			Double distanceKm,
+			Double latitude,
+			Double longitude
 	) {
+		PublicPgSummaryResponse withDistance(Double km) {
+			return new PublicPgSummaryResponse(id, name, ownerName, mobile, email, address, city, state, totalFloors,
+					stayType, unitLabel, locationUrl, genderType, upiId, upiName, description, amenities,
+					startingPrice, totalRooms, totalBeds, vacantBeds, upcomingBeds, availableFrom, images, km,
+					latitude, longitude);
+		}
 	}
 
 	public record PublicBedDetail(
@@ -187,11 +203,14 @@ public class PublicPgController {
 	private final ResidentRepository residents;
 	private final com.pg.booking.BookingRequestService bookingRequestService;
 	private final com.pg.attachment.MediaFileRepository media;
+	private final DashboardCache cache;
 
 	public PublicPgController(PgRepository pgs, RoomRepository rooms, RoomSectionRepository sections,
 			BedRepository beds, RoomSharingOptionRepository sharingOptions, ResidentRepository residents,
-			com.pg.booking.BookingRequestService bookingRequestService, com.pg.attachment.MediaFileRepository media) {
+			com.pg.booking.BookingRequestService bookingRequestService, com.pg.attachment.MediaFileRepository media,
+			DashboardCache cache) {
 		this.media = media;
+		this.cache = cache;
 		this.pgs = pgs;
 		this.rooms = rooms;
 		this.sections = sections;
@@ -201,20 +220,91 @@ public class PublicPgController {
 		this.bookingRequestService = bookingRequestService;
 	}
 
+	private static final int DEFAULT_PAGE_SIZE = 20;
+	private static final int MAX_PAGE_SIZE = 50;
+
+	/**
+	 * Active properties, one page at a time (20 by default, at most 50). Send {@code latitude} and {@code longitude}
+	 * to get the nearest first, each with its {@code distanceKm}; properties without a saved position come last.
+	 * Without a position the oldest properties come first. Only the properties on the requested page are loaded
+	 * in full.
+	 */
 	@GetMapping("/pgs")
-	public List<PublicPgSummaryResponse> listPgs(@RequestParam(required = false) String city) {
-		List<Pg> allPgs = pgs.findAll().stream().filter(Pg::isActive).toList();
-		if (city != null && !city.isBlank()) {
-			String q = city.trim().toLowerCase();
-			allPgs = allPgs.stream().filter(p -> p.getCity() != null && p.getCity().toLowerCase().contains(q)).toList();
+	public Paged<PublicPgSummaryResponse> listPgs(@RequestParam(required = false) String city,
+			@RequestParam(required = false) Double latitude, @RequestParam(required = false) Double longitude,
+			@RequestParam(required = false) Integer page, @RequestParam(required = false) Integer size) {
+		PgLocation.validate(latitude, longitude);
+		int pageNo = page == null ? 0 : page;
+		int pageSize = size == null ? DEFAULT_PAGE_SIZE : size;
+		if (pageNo < 0) {
+			throw new BadRequestException("page cannot be negative");
+		}
+		if (pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
+			throw new BadRequestException("size must be between 1 and " + MAX_PAGE_SIZE);
 		}
 
-		Map<Long, List<String>> pictures = new HashMap<>();
-		media.findByOwnerTypeAndOwnerIdInOrderById("PROPERTY", allPgs.stream().map(Pg::getId).toList())
-				.forEach(m -> pictures.computeIfAbsent(m.getOwnerId(), k -> new ArrayList<>()).add(m.getUrl()));
+		// The active properties are the same for every visitor, so they are read once and reused (see DashboardCache).
+		String cityFilter = city == null ? "" : city.trim().toLowerCase();
+		List<Pg> allPgs = cache.publicData(new PublicKey("active", cityFilter, null), () -> pgs.findAll().stream()
+				.filter(Pg::isActive)
+				.filter(p -> cityFilter.isEmpty() || p.getCity() != null && p.getCity().toLowerCase().contains(cityFilter))
+				.toList());
+
+		Map<Long, Double> distances = new HashMap<>();
+		if (latitude != null) {
+			for (Pg p : allPgs) {
+				if (p.getLatitude() != null && p.getLongitude() != null) {
+					distances.put(p.getId(), distanceKm(latitude, longitude, p.getLatitude(), p.getLongitude()));
+				}
+			}
+			allPgs = allPgs.stream().sorted(Comparator
+					.comparing((Pg p) -> distances.getOrDefault(p.getId(), Double.MAX_VALUE)).thenComparing(Pg::getId))
+					.toList();
+		} else {
+			allPgs = allPgs.stream().sorted(Comparator.comparing(Pg::getId)).toList();
+		}
+
+		int total = allPgs.size();
+		int from = (int) Math.min((long) pageNo * pageSize, total);
+		List<Pg> pageItems = allPgs.subList(from, (int) Math.min((long) from + pageSize, total));
+		int totalPages = (int) Math.ceil(total / (double) pageSize);
+		if (pageItems.isEmpty()) {
+			return new Paged<>(List.of(), pageNo, pageSize, total, totalPages);
+		}
+
+		// Cards are built once per property and reused; only the ones not cached yet are built now.
+		Map<Long, PublicPgSummaryResponse> cards = new HashMap<>();
+		List<Pg> missing = new ArrayList<>();
+		for (Pg pg : pageItems) {
+			PublicPgSummaryResponse hit = cache.publicDataIfPresent(new PublicKey("summary", null, pg.getId()));
+			if (hit != null) {
+				cards.put(pg.getId(), hit);
+			} else {
+				missing.add(pg);
+			}
+		}
+		if (!missing.isEmpty()) {
+			Map<Long, List<String>> pictures = new HashMap<>();
+			media.findByOwnerTypeAndOwnerIdInOrderById("PROPERTY", missing.stream().map(Pg::getId).toList())
+					.forEach(m -> pictures.computeIfAbsent(m.getOwnerId(), k -> new ArrayList<>()).add(m.getUrl()));
+			for (Pg pg : missing) {
+				PublicPgSummaryResponse card = summaryCard(pg, pictures.getOrDefault(pg.getId(), List.of()));
+				cache.putPublicData(new PublicKey("summary", null, pg.getId()), card);
+				cards.put(pg.getId(), card);
+			}
+		}
 
 		List<PublicPgSummaryResponse> result = new ArrayList<>();
-		for (Pg pg : allPgs) {
+		for (Pg pg : pageItems) {
+			Double km = distances.containsKey(pg.getId()) ? Math.round(distances.get(pg.getId()) * 100) / 100.0 : null;
+			result.add(cards.get(pg.getId()).withDistance(km));
+		}
+		return new Paged<>(result, pageNo, pageSize, total, totalPages);
+	}
+
+	/** The list card of one property, without the distance (that depends on who is asking). */
+	private PublicPgSummaryResponse summaryCard(Pg pg, List<String> pictures) {
+		{
 			List<Room> pgRooms = rooms.findByPgIdOrderByNumber(pg.getId());
 			List<Bed> pgBeds = beds.findByPgIdOrderByBedNumber(pg.getId());
 			int totalBeds = pgBeds.size();
@@ -256,7 +346,7 @@ public class PublicPgController {
 			}
 
 			List<String> amenitiesList = parseAmenities(pg.getAmenities());
-			result.add(new PublicPgSummaryResponse(
+			return new PublicPgSummaryResponse(
 					pg.getId(),
 					pg.getName(),
 					pg.getOwnerName(),
@@ -280,10 +370,21 @@ public class PublicPgController {
 					vacantBeds,
 					upcomingBeds,
 					soonest,
-					pictures.getOrDefault(pg.getId(), List.of())
-			));
+					pictures,
+					null,
+					pg.getLatitude(),
+					pg.getLongitude()
+			);
 		}
-		return result;
+	}
+
+	/** Great-circle (haversine) distance in kilometres. */
+	private static double distanceKm(double lat1, double lon1, double lat2, double lon2) {
+		double dLat = Math.toRadians(lat2 - lat1);
+		double dLon = Math.toRadians(lon2 - lon1);
+		double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(Math.toRadians(lat1))
+				* Math.cos(Math.toRadians(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+		return 6371.0 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 	}
 
 	@GetMapping("/pgs/{id}")

@@ -42,11 +42,13 @@ public class PgService {
 			/* Amenity codes picked from the property type's catalog; replaces the free-text amenities when sent */
 			List<String> amenityCodes,
 			/* Where the property is (WGS84); see PgLocation */
-			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country) {
+			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country,
+			String alternateMobile, @Size(max = 4000) String rules) {
 	}
 
 	public record UpdatePgProfileRequest(@NotBlank @Size(max = 120) String name, String ownerName,
-			String mobile, String email, String address, String city, String state, Integer totalFloors,
+			String mobile, @Pattern(regexp = "|\\d{10,15}", message = "must be 10-15 digits") String alternateMobile,
+			String email, String address, String city, String state, Integer totalFloors,
 			String stayType, String unitLabel, String locationUrl,
 			String genderType, String upiId, String upiName, String description, String amenities,
 			java.math.BigDecimal startingPrice, List<String> amenityCodes,
@@ -54,7 +56,7 @@ public class PgService {
 			@Size(max = 4000) String rules) {
 	}
 
-	public record PgResponse(Long id, String name, String ownerName, String mobile, String email, String address,
+	public record PgResponse(Long id, String name, String ownerName, String mobile, String alternateMobile, String email, String address,
 			String city, String state, String plan, Integer totalFloors,
 			String stayType, String unitLabel, String locationUrl,
 			String genderType, String upiId, String upiName, String description, String amenities,
@@ -125,15 +127,19 @@ public class PgService {
 		pg.setDescription(r.description());
 		pg.setAmenities(r.amenities());
 		pg.setStartingPrice(r.startingPrice());
+		if (r.alternateMobile() != null && !r.alternateMobile().isBlank()) pg.setAlternateMobile(r.alternateMobile().trim());
+		if (r.rules() != null && !r.rules().isBlank()) pg.setRules(r.rules().trim());
+
 		PgLocation.apply(pg, r.latitude(), r.longitude(), r.locality(), r.subLocality(), r.pincode(), r.country());
 		pg.setLicenseKey(UUID.randomUUID().toString());
 		pg.setLicenseStart(LocalDateTime.now());
 		pg.setLicenseExpiry(LocalDateTime.now().plusMonths(1));
 		pg.setActive(true);
+		pg.setAmenities(String.join(", ", r.amenityCodes() != null ? r.amenityCodes() : List.of()));
 		pg = pgs.save(pg);
-		if (r.amenityCodes() != null) {
-			propertyConfig.applyAmenities(pg, r.amenityCodes());
-		}
+//		if (r.amenityCodes() != null) {
+//			propertyConfig.applyAmenities(pg, r.amenityCodes());
+//		}
 
 		if (existingOwner != null) {
 			ownerPgs.link(existingOwner.getId(), pg.getId());
@@ -187,6 +193,7 @@ public class PgService {
 		pg.setName(req.name().trim());
 		if (req.ownerName() != null) pg.setOwnerName(req.ownerName().trim());
 		if (req.mobile() != null) pg.setMobile(req.mobile().trim());
+		if (req.alternateMobile() != null) pg.setAlternateMobile(req.alternateMobile().isBlank() ? null : req.alternateMobile().trim());
 		if (req.email() != null) pg.setEmail(req.email().trim());
 		if (req.address() != null) pg.setAddress(req.address().trim());
 		if (req.city() != null) pg.setCity(req.city().trim());
@@ -215,7 +222,7 @@ public class PgService {
 	}
 
 	private PgResponse toResponse(Pg p) {
-		return new PgResponse(p.getId(), p.getName(), p.getOwnerName(), p.getMobile(), p.getEmail(), p.getAddress(),
+		return new PgResponse(p.getId(), p.getName(), p.getOwnerName(), p.getMobile(), p.getAlternateMobile(), p.getEmail(), p.getAddress(),
 				p.getCity(), p.getState(), p.getPlan(), p.getTotalFloors(),
 				p.getStayType() != null ? p.getStayType() : "PG",
 				p.getUnitLabel() != null ? p.getUnitLabel() : "Room",

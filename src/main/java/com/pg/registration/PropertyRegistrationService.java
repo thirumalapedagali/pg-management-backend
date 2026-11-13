@@ -38,7 +38,9 @@ public class PropertyRegistrationService {
 			@Size(max = 1000) String locationUrl, @Size(max = 30) String genderType,
 			@Size(max = 100) String upiId, @Size(max = 150) String upiName,
 			@Size(max = 2000) String description, BigDecimal startingPrice, List<String> amenityCodes,
-			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country) {
+			Double latitude, Double longitude, String locality, String subLocality, String pincode, String country,
+			@Pattern(regexp = "^$|\\d{10,15}", message = "must be 10-15 digits") String alternateMobile,
+			@Size(max = 4000) String rules) {
 	}
 
 	public record RegistrationItem(Long id, String propertyName, String ownerName, String mobile, String email,
@@ -72,13 +74,21 @@ public class PropertyRegistrationService {
 		if (registrations.existsByMobileAndStatus(mobile, RegistrationStatus.PENDING)) {
 			throw new BadRequestException("A registration for " + mobile + " is already waiting for approval.");
 		}
+		if (r.latitude() == null || r.longitude() == null) {
+			throw new BadRequestException("Please pick the property location on the map.");
+		}
+		if (r.totalFloors() == null || r.totalFloors() < 1) {
+			throw new BadRequestException("Please enter the number of floors.");
+		}
+
 		String contact = r.contactMobile() == null || r.contactMobile().isBlank() ? mobile : r.contactMobile().trim();
 		PgRequest pg = new PgRequest(r.name().trim(), r.ownerName().trim(), contact, blankToNull(r.email()),
 				blankToNull(r.address()), blankToNull(r.city()), blankToNull(r.state()), null, r.totalFloors(),
 				r.stayType(), r.unitLabel(), blankToNull(r.locationUrl()), r.genderType(), blankToNull(r.upiId()),
 				blankToNull(r.upiName()), r.description(), null, r.startingPrice(), mobile, mobile,
 				/* the password is kept only as a hash, on the registration row */ "-", r.amenityCodes(), r.latitude(),
-				r.longitude(), r.locality(), r.subLocality(), r.pincode(), r.country());
+				r.longitude(), r.locality(), r.subLocality(), r.pincode(), r.country(), blankToNull(r.alternateMobile()),
+				blankToNull(r.rules()));
 
 		PropertyRegistration reg = new PropertyRegistration();
 		reg.setPropertyName(pg.name());

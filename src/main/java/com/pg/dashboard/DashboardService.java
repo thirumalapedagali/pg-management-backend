@@ -45,7 +45,7 @@ public class DashboardService {
 	}
 
 	public record DueItem(Long residentId, String name, String roomNumber, String sectionName, String bedNumber, BigDecimal due,
-			LocalDate joinedOn, LocalDate lastPaymentDate) {
+			LocalDate joinedOn, LocalDate lastPaymentDate, String floorName) {
 	}
 
 	/** One property's share of a consolidated ("all properties") summary. */
@@ -122,6 +122,37 @@ public class DashboardService {
 
 	public Summary summary() {
 		return summaryFor(TenantContext.requirePgId());
+	}
+
+	public List<DueItem> pendingDues() {
+		return pendingDuesFor(TenantContext.requirePgId());
+	}
+
+	public List<DueItem> pendingDuesAll(String username) {
+		List<Pg> owned = ownedProperties(username);
+		List<List<DueItem>> parts = cache.parallelMap(owned, p -> pendingDuesFor(p.getId()));
+		return parts.stream().flatMap(List::stream)
+				.sorted(Comparator.comparing(DueItem::due).reversed()).toList();
+	}
+
+	private List<DueItem> pendingDuesFor(Long pgId) {
+		LocalDate today = clock.today();
+		return cache.pg("pending-dues", pgId, today, () -> computePendingDues(pgId, today));
+	}
+
+	private List<DueItem> computePendingDues(Long pgId, LocalDate today) {
+		List<ResidentResponse> residentList = residentService.list(pgId, "ACTIVE");
+		Map<Long, String> roomFloors = rooms.findByPgIdOrderByNumber(pgId).stream()
+				.collect(Collectors.toMap(Room::getId, rm -> rm.getFloorName() != null ? rm.getFloorName() : "Ground Floor", (a, b) -> a));
+		Map<Long, LocalDate> lastPayments = payments.maxPaymentDateByResident(pgId).stream()
+				.collect(Collectors.toMap(row -> (Long) row[0], row -> (LocalDate) row[1], (a, b) -> a));
+		return residentList.stream().filter(r -> r.due().signum() > 0)
+				.sorted(Comparator.comparing(ResidentResponse::due).reversed())
+				.map(r -> {
+					LocalDate lastPaymentDate = lastPayments.get(r.id());
+					String floorName = r.roomId() != null ? roomFloors.getOrDefault(r.roomId(), "Ground Floor") : "Ground Floor";
+					return new DueItem(r.id(), r.name(), r.roomNumber(), r.sectionName(), r.bedNumber(), r.due(), r.joinedOn(), lastPaymentDate, floorName);
+				}).toList();
 	}
 
 	/** Consolidated numbers across every property of the owner. */
@@ -205,9 +236,7 @@ public class DashboardService {
 		List<DueItem> pending = residentList.stream().filter(r -> r.due().signum() > 0)
 				.sorted(Comparator.comparing(ResidentResponse::due).reversed())
 				.map(r -> {
-					LocalDate lastPaymentDate = payments.findByPgIdAndResidentIdOrderByDateDescIdDesc(pgId, r.id())
-							.stream().findFirst().map(com.pg.payment.Payment::getDate).orElse(null);
-					return new DueItem(r.id(), r.name(), r.roomNumber(), r.sectionName(), r.bedNumber(), r.due(), r.joinedOn(), lastPaymentDate);
+					return new DueItem(r.id(), r.name(), r.roomNumber(), r.sectionName(), r.bedNumber(), r.due(), r.joinedOn(), null, null);
 				}).toList();
 		BigDecimal totalDue = pending.stream().map(DueItem::due).reduce(BigDecimal.ZERO, BigDecimal::add);
 

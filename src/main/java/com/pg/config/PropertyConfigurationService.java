@@ -127,8 +127,42 @@ public class PropertyConfigurationService {
 	@Transactional
 	public void applyAmenities(Pg pg, List<String> codes) {
 		String type = catalog.requireType(pg.getStayType());
-		List<AmenityChoice> choices = codes.stream().map(c -> new AmenityChoice(c, true, null)).toList();
-		pg.setAmenities(saveAmenities(pg.getId(), type, choices));
+		
+		java.util.Set<String> offeredCodes = catalog.amenitiesOf(type).stream()
+				.map(m -> m.amenity().code().trim().toUpperCase(Locale.ROOT))
+				.collect(java.util.stream.Collectors.toSet());
+		
+		java.util.Set<String> globalCodes = amenities.findAll().stream()
+				.map(a -> a.getCode().trim().toUpperCase(Locale.ROOT))
+				.collect(java.util.stream.Collectors.toSet());
+		
+		List<String> validCodes = new ArrayList<>();
+		List<String> customCodes = new ArrayList<>();
+		
+		for (String c : codes) {
+			String cleanCode = c.trim().toUpperCase(Locale.ROOT);
+			if (offeredCodes.contains(cleanCode)) {
+				validCodes.add(c);
+			} else if (globalCodes.contains(cleanCode)) {
+				// Strict refusal for global amenities of another type
+				throw new BadRequestException("Amenity " + c + " is not available for " + type);
+			} else {
+				customCodes.add(c);
+			}
+		}
+		
+		List<AmenityChoice> choices = validCodes.stream()
+				.map(c -> new AmenityChoice(c, true, null))
+				.toList();
+		String savedNames = saveAmenities(pg.getId(), type, choices);
+		
+		List<String> allNames = new ArrayList<>();
+		if (savedNames != null && !savedNames.trim().isEmpty()) {
+			allNames.add(savedNames);
+		}
+		allNames.addAll(customCodes);
+		
+		pg.setAmenities(String.join(", ", allNames));
 	}
 
 	/** Saves the selection and returns the chosen names as text, which the older public listing still reads. */
