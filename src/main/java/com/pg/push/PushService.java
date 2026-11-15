@@ -72,25 +72,30 @@ public class PushService {
 		if (r == null) {
 			return "";
 		}
-		StringBuilder sb = new StringBuilder();
-		sb.append(r.getName());
-		if (r.getRoomId() != null) {
-			Room room = rooms.findByPgIdAndId(pgId, r.getRoomId()).orElse(null);
-			if (room != null) {
-				sb.append(" (Room ").append(room.getNumber());
-				if (r.getSectionId() != null) {
-					RoomSection sec = sections.findByPgIdAndId(pgId, r.getSectionId()).orElse(null);
-					if (sec != null && !"Main Room".equals(sec.getSectionName())) {
-						sb.append(" · ").append(sec.getSectionName());
-					}
-				}
-				if (r.getBedId() != null) {
-					Bed bed = beds.findByPgIdAndId(pgId, r.getBedId()).orElse(null);
-					if (bed != null) {
-						sb.append(" · Bed ").append(bed.getBedNumber());
-					}
-				}
-				sb.append(")");
+		String where = formatBedLocation(pgId, r);
+		return where.isEmpty() ? r.getName() : r.getName() + " (" + where + ")";
+	}
+
+	/** Where the resident sleeps, e.g. "Room 101 · Sharing 2 · Bed B1"; empty when no room is assigned. */
+	public String formatBedLocation(Long pgId, com.pg.resident.Resident r) {
+		if (r == null || r.getRoomId() == null) {
+			return "";
+		}
+		Room room = rooms.findByPgIdAndId(pgId, r.getRoomId()).orElse(null);
+		if (room == null) {
+			return "";
+		}
+		StringBuilder sb = new StringBuilder("Room ").append(room.getNumber());
+		if (r.getSectionId() != null) {
+			RoomSection sec = sections.findByPgIdAndId(pgId, r.getSectionId()).orElse(null);
+			if (sec != null && !"Main Room".equals(sec.getSectionName())) {
+				sb.append(" · ").append(sec.getSectionName());
+			}
+		}
+		if (r.getBedId() != null) {
+			Bed bed = beds.findByPgIdAndId(pgId, r.getBedId()).orElse(null);
+			if (bed != null) {
+				sb.append(" · Bed ").append(bed.getBedNumber());
 			}
 		}
 		return sb.toString();
@@ -110,6 +115,15 @@ public class PushService {
 
 	public void toPg(Long pgId, String title, String body) {
 		toPg(pgId, title, body, Map.of());
+	}
+
+	/** Everyone living in the property except one resident (the one the news is about). */
+	public void toPgExcept(Long pgId, Long exceptResidentId, String title, String body) {
+		if (pgId == null) {
+			return;
+		}
+		queue(() -> tokens.tokensForPgExcept(pgId, exceptResidentId == null ? -1L : exceptResidentId), title, body,
+				Map.of(), null);
 	}
 
 	/** One resident. */

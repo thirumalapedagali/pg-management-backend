@@ -107,5 +107,22 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
 	                                   @Param("floor") String floor,
 	                                   @Param("search") String search);
 
+	/** One page of current residents who have a notice in the given statuses; {@code search} is lower-case, '' for none. */
+	@Query("select r from Resident r " +
+	       "left join Room rm on r.roomId = rm.id " +
+	       "left join Bed b on r.bedId = b.id " +
+	       "where r.pgId = :pgId and r.status = com.pg.resident.ResidentStatus.ACTIVE " +
+	       "and r.noticeStatus in :statuses " +
+	       "and (:search = '' or " +
+	       "     lower(r.name) like concat('%', :search, '%') or " +
+	       "     lower(r.phone) like concat('%', :search, '%') or " +
+	       "     lower(rm.number) like concat('%', :search, '%') or " +
+	       "     lower(b.bedNumber) like concat('%', :search, '%')) " +
+	       "order by r.vacateOn asc, r.name asc")
+	Page<Resident> searchNotices(@Param("pgId") Long pgId,
+	                             @Param("statuses") java.util.Collection<NoticeStatus> statuses,
+	                             @Param("search") String search,
+	                             Pageable pageable);
+
 	Page<Resident> findByIdIn(List<Long> ids, Pageable pageable);
 }

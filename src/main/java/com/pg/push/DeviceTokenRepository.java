@@ -30,6 +30,12 @@ public interface DeviceTokenRepository extends JpaRepository<DeviceToken, Long> 
 			+ "and u.status = com.pg.user.Status.ACTIVE)")
 	List<String> tokensForPg(@Param("pgId") Long pgId);
 
+	/** Tokens of every resident login in a property except one resident's. */
+	@Query("select d.token from DeviceToken d where d.userId in "
+			+ "(select u.id from UserEntity u where u.pgId = :pgId and u.role = com.pg.user.Role.RESIDENT "
+			+ "and u.status = com.pg.user.Status.ACTIVE and (u.residentId is null or u.residentId <> :residentId))")
+	List<String> tokensForPgExcept(@Param("pgId") Long pgId, @Param("residentId") Long residentId);
+
 	/** Tokens of one resident's login. */
 	@Query("select d.token from DeviceToken d where d.userId in "
 			+ "(select u.id from UserEntity u where u.pgId = :pgId and u.residentId = :residentId "

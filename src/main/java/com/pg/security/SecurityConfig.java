@@ -57,19 +57,20 @@ public class SecurityConfig {
 						// Dropdown options and the property-type catalog are not private; the owner sign-up form needs them.
 						.requestMatchers(HttpMethod.GET, "/api/lookups", "/api/config/**").permitAll()
 						.requestMatchers("/api/me/devices").hasAnyRole("SUPER_ADMIN", "OWNER", "MANAGER", "RESIDENT")
+						.requestMatchers(HttpMethod.POST, "/api/feedback").hasAnyRole("SUPER_ADMIN", "OWNER", "MANAGER", "RESIDENT")
 						.requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
 						.requestMatchers("/api/users/**").hasAnyRole("SUPER_ADMIN", "OWNER")
 						.requestMatchers("/api/me/**").hasRole("RESIDENT")
 						// Residents may explore PGs and look at room availability.
 						.requestMatchers(HttpMethod.GET, "/api/rooms", "/api/rooms/**", "/api/explore/**",
-								"/api/announcements", "/api/support-contacts")
+								"/api/announcements", "/api/support-contacts", "/api/menu")
 						.hasAnyRole("SUPER_ADMIN", "OWNER", "MANAGER", "RESIDENT")
 						.requestMatchers("/api/rooms/**", "/api/residents/**", "/api/payments/**",
 								"/api/expenses/**", "/api/master/**", "/api/dashboard/**",
 								"/api/notification-config/**", "/api/notifications/**",
 								"/api/booking-requests/**", "/api/pg/**", "/api/announcements/**",
 								"/api/complaints/**", "/api/support-contacts/**", "/api/properties/**",
-								"/api/attachments/**", "/api/media/**")
+								"/api/attachments/**", "/api/media/**", "/api/menu/**")
 						.hasAnyRole(STAFF)
 						.anyRequest().denyAll())
 				.addFilterBefore(new JwtFilter(jwtService, users, pgs, ownerAccess),

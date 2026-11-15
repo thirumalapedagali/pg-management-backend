@@ -49,6 +49,16 @@ public class ResidentController {
 		return ResponseEntity.ok(service.getSummary());
 	}
 
+	/** Residents with a notice to vacate, one page at a time, filtered by notice status and search text. */
+	@GetMapping("/notices")
+	public Paged<ResidentResponse> notices(
+			@org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "REQUESTED") String status,
+			@org.springframework.web.bind.annotation.RequestParam(required = false) String search,
+			@org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "0") int page,
+			@org.springframework.web.bind.annotation.RequestParam(required = false, defaultValue = "20") int size) {
+		return service.listNotices(status, search, page, size);
+	}
+
 	/** Notice-to-vacate requests waiting for the owner (dashboard badge). */
 	@GetMapping("/notice-count")
 	public java.util.Map<String, Long> noticeCount() {

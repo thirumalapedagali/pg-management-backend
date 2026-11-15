@@ -3,6 +3,7 @@ package com.pg.resident;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -16,6 +17,8 @@ import com.pg.common.NotFoundException;
 import com.pg.complaint.ComplaintService;
 import com.pg.complaint.ComplaintService.ComplaintRequest;
 import com.pg.complaint.ComplaintService.ComplaintResponse;
+import com.pg.menu.MenuService;
+import com.pg.menu.MenuService.MealOccurrence;
 import com.pg.payment.Payment;
 import com.pg.payment.PaymentRepository;
 import com.pg.payment.PaymentService;
@@ -49,9 +52,11 @@ public class MeController {
 	private final PaymentService paymentService;
 	private final PgRepository pgs;
 	private final ComplaintService complaints;
+	private final MenuService menu;
 
 	public MeController(UserRepository users, ResidentService residents, PaymentRepository payments,
-			PaymentService paymentService, PgRepository pgs, ComplaintService complaints) {
+			PaymentService paymentService, PgRepository pgs, ComplaintService complaints, MenuService menu) {
+		this.menu = menu;
 		this.users = users;
 		this.residents = residents;
 		this.payments = payments;
@@ -118,6 +123,18 @@ public class MeController {
 		complaints.markSeen(residentId(auth));
 	}
 
+	/** Meals being served now and the rest of today and tomorrow, each with the resident's "I will eat" answer. */
+	@GetMapping("/meals")
+	public List<MealOccurrence> meals(Authentication auth) {
+		return menu.upcomingFor(residentId(auth));
+	}
+
+	/** Body: {mealId, date (yyyy-MM-dd), attending}. Tells the kitchen whether to count this resident in. */
+	@PostMapping("/meals/attend")
+	public void attend(Authentication auth, @RequestBody Map<String, Object> body) {
+		menu.setAttending(residentId(auth), Long.valueOf(String.valueOf(body.get("mealId"))),
+				LocalDate.parse(String.valueOf(body.get("date"))), Boolean.parseBoolean(String.valueOf(body.get("attending"))));
+	}
 	@PostMapping("/payments")
 	public PaymentResponse recordPayment(Authentication auth, @Valid @RequestBody ResidentPaymentRequest req) {
 		Long residentId = users.findByUsername(auth.getName()).map(u -> u.getResidentId())

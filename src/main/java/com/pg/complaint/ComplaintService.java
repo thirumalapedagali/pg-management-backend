@@ -7,12 +7,15 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.pg.common.AppClock;
 import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
+import com.pg.common.Paged;
 import com.pg.lookup.LookupService;
 import com.pg.lookup.LookupService.LookupItem;
 import com.pg.notification.WhatsAppService;
@@ -82,6 +85,23 @@ public class ComplaintService {
 	public List<ComplaintResponse> listAll() {
 		Long pgId = TenantContext.requirePgId();
 		return toResponses(pgId, complaints.findTop200ByPgIdOrderByIdDesc(pgId));
+	}
+
+	/** One page of the property's complaints for a status tab (OPEN, IN_PROGRESS, RESOLVED or ALL) and search text. */
+	@Transactional(readOnly = true)
+	public Paged<ComplaintResponse> listPaged(String statusFilter, String search, int page, int size) {
+		Long pgId = TenantContext.requirePgId();
+		List<ComplaintStatus> statuses = List.of(ComplaintStatus.values());
+		for (ComplaintStatus s : ComplaintStatus.values()) {
+			if (s.name().equalsIgnoreCase(statusFilter)) {
+				statuses = List.of(s);
+			}
+		}
+		String q = search == null ? "" : search.trim().toLowerCase();
+		Page<Complaint> p = complaints.search(pgId, statuses, q,
+				PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 50)));
+		return new Paged<>(toResponses(pgId, p.getContent()), p.getNumber(), p.getSize(), p.getTotalElements(),
+				p.getTotalPages());
 	}
 
 	@Transactional(readOnly = true)
@@ -211,12 +231,18 @@ public class ComplaintService {
 		if (list.isEmpty()) {
 			return List.of();
 		}
-		Map<Long, Resident> residentById = residents.findByPgIdOrderByName(pgId).stream()
-				.collect(Collectors.toMap(Resident::getId, Function.identity()));
-		Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
-				.collect(Collectors.toMap(Room::getId, Function.identity()));
-		Map<Long, Bed> bedById = beds.findByPgIdOrderByBedNumber(pgId).stream()
-				.collect(Collectors.toMap(Bed::getId, Function.identity()));
+		// Only the rows these complaints point to, not every resident, room and bed of the property.
+		Map<Long, Resident> residentById = residents
+				.findAllById(list.stream().map(Complaint::getResidentId).distinct().toList()).stream()
+				.filter(r -> pgId.equals(r.getPgId())).collect(Collectors.toMap(Resident::getId, Function.identity()));
+		Map<Long, Room> roomById = rooms
+				.findAllById(residentById.values().stream().map(Resident::getRoomId).filter(java.util.Objects::nonNull)
+						.distinct().toList())
+				.stream().collect(Collectors.toMap(Room::getId, Function.identity()));
+		Map<Long, Bed> bedById = beds
+				.findAllById(residentById.values().stream().map(Resident::getBedId).filter(java.util.Objects::nonNull)
+						.distinct().toList())
+				.stream().collect(Collectors.toMap(Bed::getId, Function.identity()));
 		Map<String, String> labelByCode = new HashMap<>();
 		for (LookupItem item : lookups.list(LookupService.COMPLAINT_CATEGORY)) {
 			labelByCode.put(item.code(), item.label());

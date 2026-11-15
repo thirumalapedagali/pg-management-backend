@@ -240,6 +240,23 @@ public class ResidentService {
 		}
 	}
 
+	/** One page of residents with a notice to vacate; {@code statusFilter} is REQUESTED, APPROVED, REJECTED or ALL. */
+	public Paged<ResidentResponse> listNotices(String statusFilter, String search, int page, int size) {
+		Long pgId = TenantContext.requirePgId();
+		checkAutoCheckouts(pgId);
+		List<NoticeStatus> statuses = List.of(NoticeStatus.values());
+		for (NoticeStatus s : NoticeStatus.values()) {
+			if (s.name().equalsIgnoreCase(statusFilter)) {
+				statuses = List.of(s);
+			}
+		}
+		String q = search == null ? "" : search.trim().toLowerCase();
+		Page<Resident> p = residents.searchNotices(pgId, statuses, q,
+				PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 50)));
+		return new Paged<>(mapToResponses(pgId, p.getContent()), p.getNumber(), p.getSize(), p.getTotalElements(),
+				p.getTotalPages());
+	}
+
 	private List<ResidentResponse> mapToResponses(Long pgId, List<Resident> resList) {
 		Map<Long, Room> roomById = rooms.findByPgIdOrderByNumber(pgId).stream()
 				.collect(Collectors.toMap(Room::getId, Function.identity()));
@@ -410,6 +427,7 @@ public class ResidentService {
 		}
 
 		createLogin(r, req.aadhaar());
+		notifyBedOccupied(pgId, r, assignedBed);
 
 		// Send WhatsApp Welcome Message safely
 		try {
@@ -424,6 +442,24 @@ public class ResidentService {
 
 		return toResponse(r, room, section, assignedBed, opt, BigDecimal.ZERO);
 	}
+
+	private static final java.time.format.DateTimeFormatter NOTIFY_DATE =
+			java.time.format.DateTimeFormatter.ofPattern("dd MMM yyyy");
+
+	/** Tells the other residents that a bed has been taken. Never fails the check-in. */
+	private void notifyBedOccupied(Long pgId, Resident r, Bed bed) {
+		if (bed == null) {
+			return;
+		}
+		try {
+			String where = push.formatBedLocation(pgId, r);
+			push.toPgExcept(pgId, r.getId(), "Bed occupied",
+					(where.isEmpty() ? "Bed " + bed.getBedNumber() : where) + " is now occupied by a new resident.");
+		} catch (Exception e) {
+			log.warn("Failed to send bed occupied push notification: {}", e.getMessage());
+		}
+	}
+
 
 	/**
 	 * Gives the resident a login: username = mobile number, first password = last 4 digits of the Aadhaar number
@@ -660,18 +696,22 @@ public class ResidentService {
 		java.time.LocalDateTime outDateTime = checkOutTime != null ? checkOutTime
 				: (checkOutDate != null ? checkOutDate.atTime(clock.now().toLocalTime()) : clock.now());
 		LocalDate outDate = outDateTime.toLocalDate();
+		// A checkout dated in the future is only scheduled: dues are checked as of today and the bed stays occupied.
+		boolean scheduled = outDate.isAfter(clock.today());
+		java.time.LocalDateTime billAt = scheduled ? clock.now() : outDateTime;
+		LocalDate billDate = billAt.toLocalDate();
 
 		// Check dues strictly up to checkout date
 		BigDecimal billed;
 		if (r.getStayType() == StayType.DAILY) {
-			int days = billing.daysStayed(r.getCheckInTime(), outDateTime, r.getJoinedOn(), outDate);
+			int days = billing.daysStayed(r.getCheckInTime(), billAt, r.getJoinedOn(), billDate);
 			BigDecimal rate = r.getDailyRate() != null && r.getDailyRate().signum() > 0 ? r.getDailyRate()
 					: (r.getRentOverride() != null && r.getRentOverride().signum() > 0 ? r.getRentOverride()
 					: (room != null && room.getDailyRent() != null && room.getDailyRent().signum() > 0 ? room.getDailyRent()
 					: (room != null && room.getRent() != null ? room.getRent().divide(BigDecimal.valueOf(30), 2, java.math.RoundingMode.HALF_UP) : BigDecimal.ZERO)));
 			billed = rate.multiply(BigDecimal.valueOf(days));
 		} else {
-			billed = billing.monthlyBilled(r, room, outDate, null);
+			billed = billing.monthlyBilled(r, room, billDate, null);
 		}
 
 		BigDecimal paid = payments.sumForResident(pgId, id);
@@ -680,6 +720,10 @@ public class ResidentService {
 		if (due.signum() > 0) {
 			throw new BadRequestException("Cannot vacate resident with pending dues of ₹" + due.toPlainString()
 					+ ". Please collect all dues before vacating.");
+		}
+
+		if (scheduled) {
+			return scheduleVacate(r, room, outDate, returnedDeposit, paid);
 		}
 
 		// Release any assigned bed
@@ -705,6 +749,47 @@ public class ResidentService {
 				? sharingOptions.findByPgIdAndId(pgId, r.getSharingOptionId()).orElse(null) : null;
 		return toResponse(r, room, section, null, opt, paid);
 	}
+
+	/**
+	 * The owner records that a resident who is not using the app will leave on a later date. Same outcome as an
+	 * approved notice: the bed shows as getting vacated until then and is released automatically on that date.
+	 */
+	private ResidentResponse scheduleVacate(Resident r, Room room, LocalDate vacateOn, BigDecimal returnedDeposit,
+			BigDecimal paid) {
+		Long pgId = r.getPgId();
+		boolean alreadyAnnounced = vacateOn.equals(r.getVacateOn())
+				&& (r.getNoticeStatus() == NoticeStatus.REQUESTED || r.getNoticeStatus() == NoticeStatus.APPROVED);
+		if (r.getNoticeGivenOn() == null) {
+			r.setNoticeGivenOn(clock.today());
+		}
+		r.setNoticeStatus(NoticeStatus.APPROVED);
+		r.setVacateOn(vacateOn);
+		r.setReturnedDeposit(returnedDeposit != null ? returnedDeposit : BigDecimal.ZERO);
+		r = residents.save(r);
+		if (!alreadyAnnounced) {
+			notifyBedVacating(r, vacateOn);
+		}
+
+		RoomSection section = r.getSectionId() != null
+				? sections.findByPgIdAndId(pgId, r.getSectionId()).orElse(null) : null;
+		RoomSharingOption opt = r.getSharingOptionId() != null
+				? sharingOptions.findByPgIdAndId(pgId, r.getSharingOptionId()).orElse(null) : null;
+		Bed bed = r.getBedId() != null ? beds.findById(r.getBedId()).orElse(null) : null;
+		return toResponse(r, room, section, bed, opt, paid);
+	}
+
+	/** Tells the other residents which bed is being vacated and from when it is free. Never fails the caller. */
+	private void notifyBedVacating(Resident r, LocalDate vacateOn) {
+		try {
+			String where = push.formatBedLocation(r.getPgId(), r);
+			push.toPgExcept(r.getPgId(), r.getId(), "Bed available soon",
+					(where.isEmpty() ? "A bed" : where) + " is being vacated and will be available from "
+							+ vacateOn.format(NOTIFY_DATE) + ".");
+		} catch (Exception e) {
+			log.warn("Failed to send bed vacating push notification: {}", e.getMessage());
+		}
+	}
+
 
 	/** Resident asks to leave on {@code vacateOn}; at least {@link #NOTICE_DAYS} days ahead. Waits for the owner. */
 	@Transactional
@@ -745,6 +830,7 @@ public class ResidentService {
 		} catch (Exception e) {
 			log.warn("Failed to send vacate request push notification: {}", e.getMessage());
 		}
+		notifyBedVacating(r, vacateOn);
 
 		return get(id);
 	}
@@ -982,6 +1068,7 @@ public class ResidentService {
 		}
 
 		r = residents.save(r);
+		notifyBedOccupied(pgId, r, assignedBed);
 
 		// Send welcome notification
 		try {

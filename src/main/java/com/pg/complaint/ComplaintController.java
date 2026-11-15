@@ -3,12 +3,14 @@ package com.pg.complaint;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.pg.complaint.ComplaintService.ComplaintResponse;
@@ -27,9 +29,15 @@ public class ComplaintController {
 		this.service = service;
 	}
 
+	/** With {@code page} the result is one page ({@code Paged}); without it, the full list as before. */
 	@GetMapping
-	public List<ComplaintResponse> list() {
-		return service.listAll();
+	public ResponseEntity<?> list(@RequestParam(required = false, defaultValue = "OPEN") String status,
+			@RequestParam(required = false) String search, @RequestParam(required = false) Integer page,
+			@RequestParam(required = false) Integer size) {
+		if (page != null) {
+			return ResponseEntity.ok(service.listPaged(status, search, page, size != null ? size : 20));
+		}
+		return ResponseEntity.ok(service.listAll());
 	}
 
 	@GetMapping("/count")

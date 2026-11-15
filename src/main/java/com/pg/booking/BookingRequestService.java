@@ -7,11 +7,14 @@ import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
+import com.pg.common.Paged;
 import com.pg.pg.Pg;
 import com.pg.pg.PgRepository;
 import com.pg.push.PushService;
@@ -177,6 +180,22 @@ public class BookingRequestService {
 			}
 		}
 		return list.stream().map(this::toResponse).toList();
+	}
+
+	/** One page of requests for the status tab (PENDING, APPROVED, REJECTED incl. cancelled, or ALL) and search text. */
+	public Paged<BookingRequestResponse> listPaged(String statusFilter, String search, int page, int size) {
+		Long pgId = TenantContext.requirePgId();
+		List<BookingRequestStatus> statuses = switch (statusFilter == null ? "" : statusFilter.toUpperCase()) {
+			case "PENDING" -> List.of(BookingRequestStatus.PENDING);
+			case "APPROVED" -> List.of(BookingRequestStatus.APPROVED);
+			case "REJECTED" -> List.of(BookingRequestStatus.REJECTED, BookingRequestStatus.CANCELLED);
+			default -> List.of(BookingRequestStatus.values());
+		};
+		String q = search == null ? "" : search.trim().toLowerCase();
+		Page<BookingRequest> p = bookingRequests.search(pgId, statuses, q,
+				PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), 50)));
+		return new Paged<>(p.getContent().stream().map(this::toResponse).toList(), p.getNumber(), p.getSize(),
+				p.getTotalElements(), p.getTotalPages());
 	}
 
 	public long countPending() {

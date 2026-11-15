@@ -3,6 +3,7 @@ package com.pg.booking;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -26,9 +27,15 @@ public class BookingRequestController {
 		this.service = service;
 	}
 
+	/** With {@code page} the result is one page ({@code Paged}); without it, the full list as before. */
 	@GetMapping
-	public List<BookingRequestResponse> list(@RequestParam(required = false, defaultValue = "PENDING") String status) {
-		return service.list(status);
+	public ResponseEntity<?> list(@RequestParam(required = false, defaultValue = "PENDING") String status,
+			@RequestParam(required = false) String search, @RequestParam(required = false) Integer page,
+			@RequestParam(required = false) Integer size) {
+		if (page != null) {
+			return ResponseEntity.ok(service.listPaged(status, search, page, size != null ? size : 20));
+		}
+		return ResponseEntity.ok(service.list(status));
 	}
 
 	@GetMapping("/count")
