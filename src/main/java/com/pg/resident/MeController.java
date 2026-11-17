@@ -129,12 +129,13 @@ public class MeController {
 		return menu.upcomingFor(residentId(auth));
 	}
 
-	/** Body: {mealId, date (yyyy-MM-dd), attending}. Tells the kitchen whether to count this resident in. */
+	/** Body: {mealId, date (yyyy-MM-dd), attending}. attending true / false tells the kitchen yes / no; null clears the answer. */
 	@PostMapping("/meals/attend")
 	public void attend(Authentication auth, @RequestBody Map<String, Object> body) {
 		menu.setAttending(residentId(auth), Long.valueOf(String.valueOf(body.get("mealId"))),
-				LocalDate.parse(String.valueOf(body.get("date"))), Boolean.parseBoolean(String.valueOf(body.get("attending"))));
+				LocalDate.parse(String.valueOf(body.get("date"))), body.get("attending") == null ? null : Boolean.parseBoolean(String.valueOf(body.get("attending"))));
 	}
+
 	@PostMapping("/payments")
 	public PaymentResponse recordPayment(Authentication auth, @Valid @RequestBody ResidentPaymentRequest req) {
 		Long residentId = users.findByUsername(auth.getName()).map(u -> u.getResidentId())

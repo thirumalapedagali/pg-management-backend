@@ -7,7 +7,6 @@ import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -19,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 import com.pg.common.AppClock;
 import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
+import com.pg.resident.ResidentRepository;
+import com.pg.resident.ResidentStatus;
 import com.pg.tenant.TenantContext;
 
 import jakarta.validation.Valid;
@@ -55,19 +56,31 @@ public class MenuService {
 			List<String> items) {
 	}
 
-	/** One meal on one date as a resident sees it. {@code state} is NOW (being served) or UPCOMING. */
+	/** One meal on one date as a resident sees it. {@code state} is NOW or UPCOMING; {@code answer} is YES, NO or null (not answered). */
 	public record MealOccurrence(Long mealId, String name, LocalDate date, String startTime, String endTime,
-			List<String> items, String state, boolean attending, boolean canRespond) {
+			List<String> items, String state, String answer, boolean canRespond) {
 	}
-
-	public record AttendanceCount(Long mealId, long count) {
+	
+	/** How many residents will and will not eat one meal on a date. */
+	public record MealCount(Long mealId, long attending, long notAttending) {
+	}
+	
+	/** A meal with the headcount the kitchen needs; {@code notAnswered} are active residents who have not replied. */
+	public record MealSummary(Long mealId, String name, LocalDate date, String startTime, String endTime, String state,
+			long attending, long notAttending, long notAnswered) {
+	}
+	
+	public record MenuSummary(long activeResidents, List<MealSummary> meals) {
 	}
 
 	private final MenuMealRepository meals;
 	private final MealAttendanceRepository attendance;
+	private final ResidentRepository residents;
 	private final AppClock clock;
 
-	public MenuService(MenuMealRepository meals, MealAttendanceRepository attendance, AppClock clock) {
+	public MenuService(MenuMealRepository meals, MealAttendanceRepository attendance, ResidentRepository residents,
+			AppClock clock) {
+		this.residents = residents;
 		this.meals = meals;
 		this.attendance = attendance;
 		this.clock = clock;
@@ -148,12 +161,54 @@ public class MenuService {
 		meals.delete(m);
 	}
 
-	/** How many residents said they will eat each meal on {@code date} (today when null). */
+	/** How many residents said they will and will not eat each meal on {@code date} (today when null). */
 	@Transactional(readOnly = true)
-	public List<AttendanceCount> counts(LocalDate date) {
+	public List<MealCount> counts(LocalDate date) {
 		Long pgId = TenantContext.requirePgId();
-		return attendance.countByMeal(pgId, date != null ? date : clock.today()).stream()
-				.map(r -> new AttendanceCount((Long) r[0], (Long) r[2])).toList();
+		return countMap(pgId, date != null ? date : clock.today()).entrySet().stream()
+				.map(e -> new MealCount(e.getKey(), e.getValue()[0], e.getValue()[1])).toList();
+	}
+	
+	/**
+	 * For the owner's home screen: the meals being served now and the rest of today and tomorrow, with how many
+	 * residents said yes, no, or have not answered yet.
+	 */
+	@Transactional(readOnly = true)
+	public MenuSummary summary() {
+		Long pgId = TenantContext.requirePgId();
+		LocalDate today = clock.today();
+		LocalTime now = clock.now().toLocalTime();
+		long active = residents.countByPgIdAndStatus(pgId, ResidentStatus.ACTIVE);
+		List<MealSummary> out = new ArrayList<>();
+		for (LocalDate date : List.of(today, today.plusDays(1))) {
+			Map<Long, long[]> counted = countMap(pgId, date);
+			for (MenuMeal m : meals.findByPgIdAndDayOfWeekOrderByStartTimeAsc(pgId, date.getDayOfWeek().getValue())) {
+				boolean isToday = date.equals(today);
+				if (isToday && !m.getEndTime().isAfter(now)) {
+					continue;
+				}
+				long[] c = counted.getOrDefault(m.getId(), new long[2]);
+				boolean started = isToday && !m.getStartTime().isAfter(now);
+				out.add(new MealSummary(m.getId(), m.getName(), date, m.getStartTime().format(HH_MM),
+						m.getEndTime().format(HH_MM), started ? "NOW" : "UPCOMING", c[0], c[1],
+						Math.max(0, active - c[0] - c[1])));
+			}
+		}
+		return new MenuSummary(active, out);
+	}
+	
+	/** {mealId -> [yes, no]} for one date. */
+	private Map<Long, long[]> countMap(Long pgId, LocalDate date) {
+		Map<Long, long[]> byMeal = new HashMap<>();
+		for (Object[] r : attendance.countByMeal(pgId, date)) {
+			long[] c = byMeal.computeIfAbsent((Long) r[0], k -> new long[2]);
+			c[(Boolean) r[1] ? 0 : 1] = (Long) r[2];
+		}
+		return byMeal;
+	}
+	
+	private static String answerOf(Boolean attending) {
+		return attending == null ? null : attending ? "YES" : "NO";
 	}
 
 	/** Meals being served now, the rest of today's, and all of tomorrow's, with this resident's answer on each. */
@@ -163,9 +218,9 @@ public class MenuService {
 		LocalDate today = clock.today();
 		LocalTime now = clock.now().toLocalTime();
 		List<LocalDate> dates = List.of(today, today.plusDays(1));
-		Set<String> mine = new HashSet<>();
+		Map<String, Boolean> mine = new HashMap<>();
 		for (MealAttendance a : attendance.findByPgIdAndResidentIdAndMealDateIn(pgId, residentId, dates)) {
-			mine.add(a.getMealId() + "@" + a.getMealDate());
+			mine.put(a.getMealId() + "@" + a.getMealDate(), a.isAttending());
 		}
 		List<MealOccurrence> out = new ArrayList<>();
 		for (LocalDate date : dates) {
@@ -177,15 +232,15 @@ public class MenuService {
 				boolean started = isToday && !m.getStartTime().isAfter(now);
 				out.add(new MealOccurrence(m.getId(), m.getName(), date, m.getStartTime().format(HH_MM),
 						m.getEndTime().format(HH_MM), splitItems(m.getItems()), started ? "NOW" : "UPCOMING",
-						mine.contains(m.getId() + "@" + date), !started));
+						answerOf(mine.get(m.getId() + "@" + date)), !started));
 			}
 		}
 		return out;
 	}
 
-	/** Marks or clears the resident's "I will eat this" for a meal on today or tomorrow, until it starts. */
+	/** Records the resident's answer for a meal on today or tomorrow, until it starts: true = eating, false = not eating, null = clears the answer. */
 	@Transactional
-	public void setAttending(Long residentId, Long mealId, LocalDate date, boolean attending) {
+	public void setAttending(Long residentId, Long mealId, LocalDate date, Boolean attending) {
 		Long pgId = TenantContext.requirePgId();
 		MenuMeal m = find(mealId);
 		LocalDate today = clock.today();
@@ -199,15 +254,19 @@ public class MenuService {
 			throw new BadRequestException("This meal has already started");
 		}
 		var existing = attendance.findByPgIdAndResidentIdAndMealIdAndMealDate(pgId, residentId, mealId, date);
-		if (attending && existing.isEmpty()) {
-			MealAttendance a = new MealAttendance();
-			a.setResidentId(residentId);
-			a.setMealId(mealId);
-			a.setMealDate(date);
-			attendance.save(a);
-		} else if (!attending) {
+		if (attending == null) {
 			existing.ifPresent(attendance::delete);
+			return;
 		}
+		MealAttendance a = existing.orElseGet(() -> {
+			MealAttendance n = new MealAttendance();
+			n.setResidentId(residentId);
+			n.setMealId(mealId);
+			n.setMealDate(date);
+			return n;
+		});
+		a.setAttending(attending);
+		attendance.save(a);
 	}
 
 	private MenuMeal find(Long id) {

@@ -15,7 +15,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import com.pg.menu.MenuService.AttendanceCount;
+import com.pg.menu.MenuService.MealCount;
+import com.pg.menu.MenuService.MenuSummary;
 import com.pg.menu.MenuService.DayRequest;
 import com.pg.menu.MenuService.MealRequest;
 import com.pg.menu.MenuService.MealResponse;
@@ -60,8 +61,14 @@ public class MenuController {
 		return ResponseEntity.noContent().build();
 	}
 
+	/** Headcount per meal for the owner's home screen. */
+	@GetMapping("/summary")
+	public MenuSummary summary() {
+		return service.summary();
+	}
+
 	@GetMapping("/attendance")
-	public List<AttendanceCount> attendance(
+	public List<MealCount> attendance(
 			@RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date) {
 		return service.counts(date);
 	}
