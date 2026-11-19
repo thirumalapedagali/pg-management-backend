@@ -49,6 +49,23 @@ public class AdminConsoleController {
 			long managers, long residents, long blockedUsers, long pendingRegistrations) {
 	}
 
+	public record AdminAnalytics(
+			long activeUsers24h, long activeUsers7d, long activeUsers30d,
+			long activeOwners24h, long activeManagers24h, long activeResidents24h,
+			long totalUsers, long totalOwners, long totalManagers, long totalResidents, long blockedUsers,
+			long totalPgs, long activePgs, long blockedPgs, long expiredPgs, long expiringSoonPgs, long pendingRegistrations,
+			long totalBeds, long occupiedBeds, long vacantBeds, double occupancyRatePercentage, long totalActiveResidents,
+			long openComplaints, long inProgressComplaints, long pendingBookings) {
+	}
+
+	public record PropertyUserStats(
+			Long pgId, String pgName, String city, String ownerName, boolean active,
+			long totalUsers, long ownerCount, long managerCount, long residentCount,
+			long active24h, long active7d, long active30d,
+			long totalActiveResidents, long totalBeds, long occupiedBeds,
+			double appAdoptionRatePercentage) {
+	}
+
 	public record AdminUserItem(Long id, String username, String role, String status, String mobile, String email,
 			Long pgId, String pgName, List<Long> pgIds, Long residentId, LocalDateTime lastLoginAt) {
 	}
@@ -70,14 +87,25 @@ public class AdminConsoleController {
 	private final OwnerPgRepository ownerPgs;
 	private final PasswordEncoder encoder;
 	private final com.pg.registration.PropertyRegistrationRepository registrations;
+	private final com.pg.room.BedRepository beds;
+	private final com.pg.complaint.ComplaintRepository complaints;
+	private final com.pg.booking.BookingRequestRepository bookingRequests;
+	private final com.pg.resident.ResidentRepository residents;
 
 	public AdminConsoleController(PgRepository pgs, UserRepository users, OwnerPgRepository ownerPgs,
-			PasswordEncoder encoder, com.pg.registration.PropertyRegistrationRepository registrations) {
+			PasswordEncoder encoder, com.pg.registration.PropertyRegistrationRepository registrations,
+			com.pg.room.BedRepository beds, com.pg.complaint.ComplaintRepository complaints,
+			com.pg.booking.BookingRequestRepository bookingRequests,
+			com.pg.resident.ResidentRepository residents) {
 		this.registrations = registrations;
 		this.pgs = pgs;
 		this.users = users;
 		this.ownerPgs = ownerPgs;
 		this.encoder = encoder;
+		this.beds = beds;
+		this.complaints = complaints;
+		this.bookingRequests = bookingRequests;
+		this.residents = residents;
 	}
 
 	@GetMapping("/stats")
@@ -100,6 +128,174 @@ public class AdminConsoleController {
 		return new Stats(all.size(), active, blocked, expired, soon, users.countByRole(Role.OWNER),
 				users.countByRole(Role.MANAGER), users.countByRole(Role.RESIDENT), users.countByStatus(Status.BLOCKED),
 				registrations.countByStatus(com.pg.registration.RegistrationStatus.PENDING));
+	}
+
+	@GetMapping("/analytics")
+	public AdminAnalytics analytics() {
+		LocalDateTime now = LocalDateTime.now();
+		LocalDateTime ago24h = now.minusDays(1);
+		LocalDateTime ago7d = now.minusDays(7);
+		LocalDateTime ago30d = now.minusDays(30);
+
+		List<UserEntity> allUsers = users.findAll();
+		long active24h = 0, active7d = 0, active30d = 0;
+		long activeOwners24h = 0, activeManagers24h = 0, activeResidents24h = 0;
+		long totalOwners = 0, totalManagers = 0, totalResidents = 0, blockedUsers = 0;
+
+		for (UserEntity u : allUsers) {
+			if (u.getRole() == Role.OWNER) totalOwners++;
+			else if (u.getRole() == Role.MANAGER) totalManagers++;
+			else if (u.getRole() == Role.RESIDENT) totalResidents++;
+
+			if (u.getStatus() == Status.BLOCKED) {
+				blockedUsers++;
+			}
+
+			if (u.getLastLoginAt() != null) {
+				if (!u.getLastLoginAt().isBefore(ago24h)) {
+					active24h++;
+					if (u.getRole() == Role.OWNER) activeOwners24h++;
+					else if (u.getRole() == Role.MANAGER) activeManagers24h++;
+					else if (u.getRole() == Role.RESIDENT) activeResidents24h++;
+				}
+				if (!u.getLastLoginAt().isBefore(ago7d)) {
+					active7d++;
+				}
+				if (!u.getLastLoginAt().isBefore(ago30d)) {
+					active30d++;
+				}
+			}
+		}
+
+		long activePgs = 0, blockedPgs = 0, expiredPgs = 0, soonPgs = 0;
+		List<Pg> allPgs = pgs.findAll();
+		for (Pg p : allPgs) {
+			if (!p.isActive()) {
+				blockedPgs++;
+			} else if (p.getLicenseExpiry() == null || !p.getLicenseExpiry().isAfter(now)) {
+				expiredPgs++;
+			} else {
+				activePgs++;
+				if (p.getLicenseExpiry().isBefore(now.plusDays(30))) {
+					soonPgs++;
+				}
+			}
+		}
+
+		List<com.pg.room.Bed> allBeds = beds.findAll();
+		long totalBeds = allBeds.size();
+		long occupiedBeds = 0;
+		long vacantBeds = 0;
+		for (com.pg.room.Bed b : allBeds) {
+			if (b.getStatus() == com.pg.room.BedStatus.OCCUPIED) {
+				occupiedBeds++;
+			} else if (b.getStatus() == com.pg.room.BedStatus.VACANT) {
+				vacantBeds++;
+			}
+		}
+		double occupancyRate = totalBeds > 0 ? (double) occupiedBeds / totalBeds * 100.0 : 0.0;
+
+		long totalActiveResidents = residents.findAll().stream()
+				.filter(r -> r.getStatus() == com.pg.resident.ResidentStatus.ACTIVE)
+				.count();
+
+		long openComplaints = complaints.findAll().stream()
+				.filter(c -> c.getStatus() == com.pg.complaint.ComplaintStatus.OPEN)
+				.count();
+		long inProgressComplaints = complaints.findAll().stream()
+				.filter(c -> c.getStatus() == com.pg.complaint.ComplaintStatus.IN_PROGRESS)
+				.count();
+		long pendingBookings = bookingRequests.findAll().stream()
+				.filter(b -> b.getStatus() == com.pg.booking.BookingRequestStatus.PENDING)
+				.count();
+		long pendingRegistrations = registrations.countByStatus(com.pg.registration.RegistrationStatus.PENDING);
+
+		return new AdminAnalytics(
+				active24h, active7d, active30d,
+				activeOwners24h, activeManagers24h, activeResidents24h,
+				allUsers.size(), totalOwners, totalManagers, totalResidents, blockedUsers,
+				allPgs.size(), activePgs, blockedPgs, expiredPgs, soonPgs, pendingRegistrations,
+				totalBeds, occupiedBeds, vacantBeds, Math.round(occupancyRate * 10.0) / 10.0, totalActiveResidents,
+				openComplaints, inProgressComplaints, pendingBookings
+		);
+	}
+
+	@GetMapping("/property-user-stats")
+	public List<PropertyUserStats> propertyUserStats() {
+		LocalDateTime now = LocalDateTime.now();
+		LocalDateTime ago24h = now.minusDays(1);
+		LocalDateTime ago7d = now.minusDays(7);
+		LocalDateTime ago30d = now.minusDays(30);
+
+		List<Pg> allPgs = pgs.findAll();
+		List<UserEntity> allUsers = users.findAll();
+		List<OwnerPg> allOwnerLinks = ownerPgs.findAll();
+		List<com.pg.resident.Resident> allResidents = residents.findAll();
+		List<com.pg.room.Bed> allBeds = beds.findAll();
+
+		Map<Long, List<Long>> ownerPgMap = allOwnerLinks.stream()
+				.collect(Collectors.groupingBy(OwnerPg::getUserId, Collectors.mapping(OwnerPg::getPgId, Collectors.toList())));
+
+		Map<Long, List<UserEntity>> pgUsersMap = new java.util.HashMap<>();
+		for (UserEntity u : allUsers) {
+			if (u.getRole() == Role.SUPER_ADMIN) continue;
+			Set<Long> userPgIds = new LinkedHashSet<>();
+			if (u.getPgId() != null) userPgIds.add(u.getPgId());
+			if (u.getRole() == Role.OWNER && ownerPgMap.containsKey(u.getId())) {
+				userPgIds.addAll(ownerPgMap.get(u.getId()));
+			}
+			for (Long pid : userPgIds) {
+				pgUsersMap.computeIfAbsent(pid, k -> new ArrayList<>()).add(u);
+			}
+		}
+
+		Map<Long, List<com.pg.resident.Resident>> pgResidentsMap = allResidents.stream()
+				.filter(r -> r.getStatus() == com.pg.resident.ResidentStatus.ACTIVE)
+				.collect(Collectors.groupingBy(com.pg.resident.Resident::getPgId));
+
+		Map<Long, List<com.pg.room.Bed>> pgBedsMap = allBeds.stream()
+				.collect(Collectors.groupingBy(com.pg.room.Bed::getPgId));
+
+		List<PropertyUserStats> result = new ArrayList<>();
+		for (Pg p : allPgs) {
+			List<UserEntity> pUsers = pgUsersMap.getOrDefault(p.getId(), List.of());
+			List<com.pg.resident.Resident> pResidents = pgResidentsMap.getOrDefault(p.getId(), List.of());
+			List<com.pg.room.Bed> pBeds = pgBedsMap.getOrDefault(p.getId(), List.of());
+
+			long owners = 0, managers = 0, residentUsers = 0;
+			long active24h = 0, active7d = 0, active30d = 0;
+
+			for (UserEntity u : pUsers) {
+				if (u.getRole() == Role.OWNER) owners++;
+				else if (u.getRole() == Role.MANAGER) managers++;
+				else if (u.getRole() == Role.RESIDENT) residentUsers++;
+
+				if (u.getLastLoginAt() != null) {
+					if (!u.getLastLoginAt().isBefore(ago24h)) active24h++;
+					if (!u.getLastLoginAt().isBefore(ago7d)) active7d++;
+					if (!u.getLastLoginAt().isBefore(ago30d)) active30d++;
+				}
+			}
+
+			long totalBeds = pBeds.size();
+			long occupiedBeds = pBeds.stream().filter(b -> b.getStatus() == com.pg.room.BedStatus.OCCUPIED).count();
+			long activeResCount = pResidents.size();
+
+			double adoptionRate = activeResCount > 0
+					? Math.round(((double) residentUsers / activeResCount * 100.0) * 10.0) / 10.0
+					: 0.0;
+
+			result.add(new PropertyUserStats(
+					p.getId(), p.getName(), p.getCity(), p.getOwnerName(), p.isActive(),
+					pUsers.size(), owners, managers, residentUsers,
+					active24h, active7d, active30d,
+					activeResCount, totalBeds, occupiedBeds,
+					adoptionRate
+			));
+		}
+
+		result.sort(Comparator.comparing(PropertyUserStats::totalUsers).reversed().thenComparing(PropertyUserStats::pgName));
+		return result;
 	}
 
 	/** Every login except super admins, with the PG(s) it belongs to. */

@@ -18,6 +18,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.mock.web.MockMultipartFile;
 
 import com.pg.attachment.CloudinaryService;
+import com.pg.attachment.MediaService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
@@ -1261,7 +1262,11 @@ class PgApiIntegrationTest {
 				new CloudinaryService.Stored("m/3", "https://cdn.test/3.png"),
 				new CloudinaryService.Stored("m/4", "https://cdn.test/4.png"),
 				new CloudinaryService.Stored("m/5", "https://cdn.test/5.png"),
-				new CloudinaryService.Stored("m/6", "https://cdn.test/6.png"));
+				new CloudinaryService.Stored("m/6", "https://cdn.test/6.png"),
+				// the extra ID card files uploaded near the end of the test
+				new CloudinaryService.Stored("m/7", "https://cdn.test/7.png"),
+				new CloudinaryService.Stored("m/8", "https://cdn.test/8.png"),
+				new CloudinaryService.Stored("m/9", "https://cdn.test/9.png"));
 
 		// property: a gallery, owner or super admin only
 		String prop = "/api/media/property/" + pgA;
@@ -1285,7 +1290,7 @@ class PgApiIntegrationTest {
 		assertThat(call("GET", room, other, null).status()).isEqualTo(404);
 		assertThat(call("GET", "/api/media/room/99999999", o, null).status()).isEqualTo(404);
 
-		// resident: one photo and one ID card, each replaced by a newer upload
+		// resident: one photo (replaced by a newer upload) and several ID card files (front and back, up to the limit)
 		long residentId = call("POST", "/api/residents", o,
 				"{\"name\":\"Pictured\",\"phone\":\"9000000913\",\"aadhaar\":\"123456789012\",\"roomId\":" + roomId + ",\"joinedOn\":\""
 						+ LocalDate.now() + "\"}").body().get("id").asLong();
@@ -1313,7 +1318,7 @@ class PgApiIntegrationTest {
 		// Explore (no login needed) shows the property and room pictures, but never a resident's photo or ID card
 		Res listed = call("GET", "/api/public/pgs", null, null);
 		JsonNode summary = null;
-		for (JsonNode n : listed.body()) {
+		for (JsonNode n : listed.body().get("content")) {
 			if (n.get("id").asLong() == pgA) summary = n;
 		}
 		assertThat(summary).isNotNull();
@@ -1324,6 +1329,13 @@ class PgApiIntegrationTest {
 		assertThat(detail.body().get("rooms").get(0).get("images").get(0).asString()).isEqualTo("https://cdn.test/3.png");
 		assertThat(detail.body().toString()).doesNotContain("cdn.test/4.png").doesNotContain("cdn.test/5.png")
 				.doesNotContain("cdn.test/6.png");
+
+		// more ID card files are kept next to the first (front and back), up to the limit
+		for (int i = 1; i < MediaService.MAX_ID_CARDS; i++) {
+			assertThat(upload(res + "?kind=ID_CARD", o, "image/png", png).status()).isEqualTo(200);
+		}
+		assertThat(upload(res + "?kind=ID_CARD", o, "image/png", png).status()).isEqualTo(400);
+		assertThat(call("GET", res, o, null).body().size()).isEqualTo(1 + MediaService.MAX_ID_CARDS);
 
 		// deleting the resident and the room removes their pictures from Cloudinary
 		assertThat(call("DELETE", "/api/residents/" + residentId, o, null).status()).isEqualTo(204);

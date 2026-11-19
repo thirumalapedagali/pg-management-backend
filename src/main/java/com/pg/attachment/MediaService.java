@@ -21,14 +21,16 @@ import com.pg.user.UserEntity;
 import com.pg.user.UserRepository;
 
 /**
- * Pictures of properties and rooms (a gallery, up to {@value #MAX_GALLERY} each) and of residents (one photo and one
- * ID card). Properties are addressed by their own id, so a super admin or an owner can add pictures to a property
+ * Pictures of properties and rooms (a gallery, up to {@value #MAX_GALLERY} each) and of residents (one photo and up to
+ * {@value #MAX_ID_CARDS} ID card files, e.g. the front and back of an Aadhaar card). Properties are addressed by
+ * their own id, so a super admin or an owner can add pictures to a property
  * they have just created before switching into it; rooms and residents belong to the property of the session.
  */
 @Service
 public class MediaService {
 
 	public static final int MAX_GALLERY = 10;
+	public static final int MAX_ID_CARDS = 4;
 	private static final long MAX_BYTES = 10L * 1024 * 1024;
 	private static final Set<String> IMAGES = Set.of("image/jpeg", "image/png", "image/webp", "image/gif");
 
@@ -61,14 +63,18 @@ public class MediaService {
 				.toList();
 	}
 
-	/** Adds a picture. A resident's photo / ID card replaces the earlier one; property and room pictures are added. */
+	/** Adds a picture. A resident's photo replaces the earlier one; ID card, property and room pictures are added. */
 	public MediaResponse add(String type, Long id, String kind, MultipartFile file, Authentication auth) {
 		String owner = owner(type);
 		String k = kind(owner, kind);
 		Long pgId = scope(owner, id, auth);
 		check(file, "ID_CARD".equals(k));
 		List<MediaFile> same = files.findByPgIdAndOwnerTypeAndOwnerIdAndKind(pgId, owner, id, k);
-		if (!"RESIDENT".equals(owner) && same.size() >= MAX_GALLERY) {
+		if ("ID_CARD".equals(k)) {
+			if (same.size() >= MAX_ID_CARDS) {
+				throw new BadRequestException("At most " + MAX_ID_CARDS + " ID card files can be added");
+			}
+		} else if (!"RESIDENT".equals(owner) && same.size() >= MAX_GALLERY) {
 			throw new BadRequestException("At most " + MAX_GALLERY + " pictures can be added here");
 		}
 		CloudinaryService.Stored stored = cloud.upload(file, "mystay/pg-" + pgId + "/" + owner.toLowerCase(Locale.ROOT));
@@ -85,7 +91,7 @@ public class MediaService {
 			cloud.delete(stored.id(), stored.url());
 			throw e;
 		}
-		if ("RESIDENT".equals(owner)) {
+		if ("PHOTO".equals(k)) {
 			same.forEach(this::drop);
 		}
 		return view(row);
