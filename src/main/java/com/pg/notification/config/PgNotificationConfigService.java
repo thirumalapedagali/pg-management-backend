@@ -40,11 +40,23 @@ public class PgNotificationConfigService {
 			boolean notifyOnMove) {
 	}
 
+	/**
+	 * The common configuration is stored as one more row of {@code pg_whatsapp_config}, under this reserved property
+	 * id (real property ids start at 1). It is set by the super admin and used by every property that has no
+	 * configuration of its own switched on.
+	 */
+	public static final Long COMMON_CONFIG_ID = 0L;
+
 	private final PgWhatsappConfigRepository whatsappRepository;
 	private final CryptoService cryptoService;
 
+	/** The configuration to send with for a property: its own when that is switched on, otherwise the common one. */
 	public Optional<PgWhatsappConfig> findWhatsapp(Long pgId) {
-		return whatsappRepository.findByPgId(pgId);
+		Optional<PgWhatsappConfig> own = whatsappRepository.findByPgId(pgId);
+		if (own.isPresent() && own.get().isEnabled()) {
+			return own;
+		}
+		return whatsappRepository.findByPgId(COMMON_CONFIG_ID);
 	}
 
 	public String whatsappToken(PgWhatsappConfig cfg) {
@@ -52,7 +64,14 @@ public class PgNotificationConfigService {
 	}
 
 	public WhatsappConfigResponse getWhatsappConfig() {
-		Long pgId = TenantContext.requirePgId();
+		return getConfig(TenantContext.requirePgId());
+	}
+
+	public WhatsappConfigResponse getCommonWhatsappConfig() {
+		return getConfig(COMMON_CONFIG_ID);
+	}
+
+	private WhatsappConfigResponse getConfig(Long pgId) {
 		return whatsappRepository.findByPgId(pgId)
 				.map(this::toResponse)
 				.orElseGet(() -> new WhatsappConfigResponse(null, pgId, null, null, "v22.0", false, false, true, true, true, true));
@@ -60,7 +79,15 @@ public class PgNotificationConfigService {
 
 	@Transactional
 	public WhatsappConfigResponse updateWhatsappConfig(WhatsappConfigRequest req) {
-		Long pgId = TenantContext.requirePgId();
+		return updateConfig(TenantContext.requirePgId(), req);
+	}
+
+	@Transactional
+	public WhatsappConfigResponse updateCommonWhatsappConfig(WhatsappConfigRequest req) {
+		return updateConfig(COMMON_CONFIG_ID, req);
+	}
+
+	private WhatsappConfigResponse updateConfig(Long pgId, WhatsappConfigRequest req) {
 		PgWhatsappConfig cfg = whatsappRepository.findByPgId(pgId).orElseGet(() -> {
 			PgWhatsappConfig created = new PgWhatsappConfig();
 			created.setPgId(pgId);

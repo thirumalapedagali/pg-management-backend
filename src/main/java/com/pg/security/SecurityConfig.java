@@ -46,6 +46,8 @@ public class SecurityConfig {
 				.authorizeHttpRequests(auth -> auth
 						.requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
 						.requestMatchers("/actuator/health").permitAll()
+						.requestMatchers("/actuator/metrics/**").permitAll()
+						.requestMatchers("/actuator/prometheus/**").permitAll()
 						// Error dispatches (404, 500...) must keep their status; otherwise the app sees them as 401 and signs the user out.
 						.requestMatchers("/error").permitAll()
 						// Public: login, registration, refresh, and public PG & room exploration.
@@ -75,6 +77,7 @@ public class SecurityConfig {
 						.anyRequest().denyAll())
 				.addFilterBefore(new JwtFilter(jwtService, users, pgs, ownerAccess),
 						UsernamePasswordAuthenticationFilter.class)
+				.addFilterAfter(new com.pg.common.ApiLoggingFilter(), JwtFilter.class)
 				// After JwtFilter, so the tenant context is still set when the request has finished.
 				.addFilterAfter(new CacheEvictionFilter(dashboardCache), JwtFilter.class);
 		return http.build();

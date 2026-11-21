@@ -14,6 +14,8 @@ public interface ExpenseRepository extends JpaRepository<Expense, Long>, JpaSpec
 
 	Optional<Expense> findByPgIdAndId(Long pgId, Long id);
 
+	List<Expense> findByPgIdAndDateOrderByIdDesc(Long pgId, LocalDate date);
+
 	@Query("select coalesce(sum(e.amount), 0) from Expense e where e.pgId = :pgId")
 	BigDecimal sumAll(@Param("pgId") Long pgId);
 

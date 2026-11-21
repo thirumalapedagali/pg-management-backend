@@ -13,6 +13,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -25,7 +26,8 @@ import lombok.RequiredArgsConstructor;
 
 /**
  * Sends WhatsApp notifications via Meta WhatsApp Cloud API.
- * Uses credentials configured per-PG (pg_whatsapp_config).
+ * Uses the property's own credentials (pg_whatsapp_config) when it has them switched on, otherwise the common
+ * configuration the super admin sets (see {@link PgNotificationConfigService#findWhatsapp}).
  */
 @Service
 @RequiredArgsConstructor
@@ -181,7 +183,8 @@ public class WhatsAppService {
 		return text;
 	}
 
-	private void post(Long pgId, String to, String type, Map<String, String> content, String messageType) {
+	@Async("notificationExecutor")
+	public void post(Long pgId, String to, String type, Map<String, String> content, String messageType) {
 		Optional<PgWhatsappConfig> found = configService.findWhatsapp(pgId);
 		if (found.isEmpty() || !found.get().isEnabled()) {
 			logger.info("WhatsApp not enabled for PG {}. Message skipped.", pgId);

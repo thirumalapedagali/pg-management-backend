@@ -8,6 +8,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -216,22 +217,45 @@ public class DashboardService {
 
 	private Summary computeSummary(Long pgId, LocalDate today) {
 		YearMonth current = YearMonth.from(today);
-		LocalDate since = current.minusMonths(5).atDay(1);
-		if (today.withDayOfYear(1).isBefore(since)) {
-			since = today.withDayOfYear(1);
-		}
-		Map<LocalDate, BigDecimal> paid = byDay(payments.dailySums(pgId, since, today));
-		Map<LocalDate, BigDecimal> spentDays = byDay(expenses.dailySums(pgId, since, today));
+		LocalDate initialSince = current.minusMonths(5).atDay(1);
+		final LocalDate since = today.withDayOfYear(1).isBefore(initialSince) ? today.withDayOfYear(1) : initialSince;
+
+		java.util.concurrent.CompletableFuture<Map<LocalDate, BigDecimal>> paidFuture =
+				java.util.concurrent.CompletableFuture.supplyAsync(() -> byDay(payments.dailySums(pgId, since, today)));
+
+		java.util.concurrent.CompletableFuture<Map<LocalDate, BigDecimal>> spentFuture =
+				java.util.concurrent.CompletableFuture.supplyAsync(() -> byDay(expenses.dailySums(pgId, since, today)));
+
+		java.util.concurrent.CompletableFuture<Object[]> roomStatsFuture =
+				java.util.concurrent.CompletableFuture.supplyAsync(() -> rooms.stats(pgId).get(0));
+
+		java.util.concurrent.CompletableFuture<List<ResidentResponse>> residentListFuture =
+				java.util.concurrent.CompletableFuture.supplyAsync(() -> residentService.list(pgId, "ACTIVE"));
+
+		java.util.concurrent.CompletableFuture<List<LocalDate>> joinDatesFuture =
+				java.util.concurrent.CompletableFuture.supplyAsync(() -> residents.joinDatesSince(pgId, current.atDay(1)));
+
+		java.util.concurrent.CompletableFuture<BigDecimal> depositFuture =
+				java.util.concurrent.CompletableFuture.supplyAsync(() -> residents.totalRefundableDeposit(pgId));
+
+		java.util.concurrent.CompletableFuture.allOf(
+				paidFuture, spentFuture, roomStatsFuture, residentListFuture, joinDatesFuture, depositFuture
+		).join();
+
+		Map<LocalDate, BigDecimal> paid = paidFuture.join();
+		Map<LocalDate, BigDecimal> spentDays = spentFuture.join();
+		Object[] roomStats = roomStatsFuture.join();
+		List<ResidentResponse> residentList = residentListFuture.join();
+		List<LocalDate> joinDates = joinDatesFuture.join();
+		BigDecimal totalRefundableDeposit = depositFuture.join();
 
 		PeriodTotals collections = PeriodTotals.compute(today, (a, b) -> sumDays(paid, a, b),
 				() -> payments.sumAll(pgId));
 		PeriodTotals spent = PeriodTotals.compute(today, (a, b) -> sumDays(spentDays, a, b),
 				() -> expenses.sumAll(pgId));
 
-		Object[] roomStats = rooms.stats(pgId).get(0);
 		int roomCount = ((Number) roomStats[0]).intValue();
 		int beds = ((Number) roomStats[1]).intValue();
-		List<ResidentResponse> residentList = residentService.list(pgId, "ACTIVE");
 		int occupied = residentList.size();
 		List<DueItem> pending = residentList.stream().filter(r -> r.due().signum() > 0)
 				.sorted(Comparator.comparing(ResidentResponse::due).reversed())
@@ -248,11 +272,8 @@ public class DashboardService {
 			months.add(new MonthPoint(ym.toString(), sumDays(paid, from, to), sumDays(spentDays, from, to)));
 		}
 
-		List<LocalDate> joinDates = residents.joinDatesSince(pgId, current.atDay(1));
 		int checkInsToday = (int) joinDates.stream().filter(today::equals).count();
 		int checkInsMonth = (int) joinDates.stream().filter(d -> YearMonth.from(d).equals(current)).count();
-
-		BigDecimal totalRefundableDeposit = residents.totalRefundableDeposit(pgId);
 
 		return new Summary(collections, spent, collections.minus(spent), roomCount, beds, occupied,
 				Math.max(0, beds - occupied), occupied, totalDue, totalRefundableDeposit, months, pending, checkInsToday, checkInsMonth, null);
@@ -281,16 +302,38 @@ public class DashboardService {
 	}
 
 	private Today computeToday(Long pgId, String pgName, LocalDate today) {
+		CompletableFuture<Map<Long, com.pg.resident.Resident>> residentsFuture =
+				CompletableFuture.supplyAsync(() -> residents.findByPgIdOrderByName(pgId).stream()
+						.collect(Collectors.toMap(r -> r.getId(), Function.identity(), (a, b) -> a)));
 
-		Map<Long, com.pg.resident.Resident> byId = residents.findByPgIdOrderByName(pgId).stream()
-				.collect(Collectors.toMap(r -> r.getId(), Function.identity(), (a, b) -> a));
-		Map<Long, String> roomNumbers = rooms.findByPgIdOrderByNumber(pgId).stream()
-				.collect(Collectors.toMap(Room::getId, Room::getNumber, (a, b) -> a));
-		Map<Long, String> sectionNames = sections.findByPgIdOrderBySectionName(pgId).stream()
-				.collect(Collectors.toMap(RoomSection::getId, RoomSection::getSectionName, (a, b) -> a));
-		Map<Long, String> bedNumbers = beds.findByPgIdOrderByBedNumber(pgId).stream()
-				.collect(Collectors.toMap(Bed::getId, Bed::getBedNumber, (a, b) -> a));
-		List<TodayPayment> pay = payments.findByPgIdAndDateBetweenOrderByDateDescIdDesc(pgId, today, today).stream()
+		CompletableFuture<Map<Long, String>> roomNumbersFuture =
+				CompletableFuture.supplyAsync(() -> rooms.findByPgIdOrderByNumber(pgId).stream()
+						.collect(Collectors.toMap(Room::getId, Room::getNumber, (a, b) -> a)));
+
+		CompletableFuture<Map<Long, String>> sectionNamesFuture =
+				CompletableFuture.supplyAsync(() -> sections.findByPgIdOrderBySectionName(pgId).stream()
+						.collect(Collectors.toMap(RoomSection::getId, RoomSection::getSectionName, (a, b) -> a)));
+
+		CompletableFuture<Map<Long, String>> bedNumbersFuture =
+				CompletableFuture.supplyAsync(() -> beds.findByPgIdOrderByBedNumber(pgId).stream()
+						.collect(Collectors.toMap(Bed::getId, Bed::getBedNumber, (a, b) -> a)));
+
+		CompletableFuture<List<com.pg.payment.Payment>> paymentsFuture =
+				CompletableFuture.supplyAsync(() -> payments.findByPgIdAndDateBetweenOrderByDateDescIdDesc(pgId, today, today));
+
+		CompletableFuture<List<com.pg.expense.Expense>> expensesFuture =
+				CompletableFuture.supplyAsync(() -> expenses.findByPgIdAndDateOrderByIdDesc(pgId, today));
+
+		CompletableFuture.allOf(residentsFuture, roomNumbersFuture, sectionNamesFuture, bedNumbersFuture, paymentsFuture, expensesFuture).join();
+
+		Map<Long, com.pg.resident.Resident> byId = residentsFuture.join();
+		Map<Long, String> roomNumbers = roomNumbersFuture.join();
+		Map<Long, String> sectionNames = sectionNamesFuture.join();
+		Map<Long, String> bedNumbers = bedNumbersFuture.join();
+		List<com.pg.payment.Payment> todayPayments = paymentsFuture.join();
+		List<com.pg.expense.Expense> todayExpenses = expensesFuture.join();
+
+		List<TodayPayment> pay = todayPayments.stream()
 				.map(p -> {
 					com.pg.resident.Resident r = byId.get(p.getResidentId());
 					return new TodayPayment(p.getId(), p.getResidentId(), r == null ? "Removed resident" : r.getName(),
@@ -300,17 +343,20 @@ public class DashboardService {
 							pgId, pgName);
 				})
 				.toList();
-		List<TodayExpense> exp = expenses.findAll((root, q, cb) -> cb.and(cb.equal(root.get("pgId"), pgId),
-				cb.equal(root.get("date"), today)), PageRequest.of(0, 200, org.springframework.data.domain.Sort.by("id").descending()))
-				.stream().map(e -> new TodayExpense(e.getId(), e.getTitle(), e.getCategory(), e.getAmount(), pgId, pgName))
+
+		List<TodayExpense> exp = todayExpenses.stream()
+				.map(e -> new TodayExpense(e.getId(), e.getTitle(), e.getCategory(), e.getAmount(), pgId, pgName))
 				.toList();
+
 		BigDecimal collected = pay.stream().map(TodayPayment::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
 		BigDecimal spent = exp.stream().map(TodayExpense::amount).reduce(BigDecimal.ZERO, BigDecimal::add);
+
 		List<TodayCheckIn> checkIns = byId.values().stream().filter(r -> today.equals(r.getJoinedOn()))
 				.map(r -> new TodayCheckIn(r.getId(), r.getName(), roomNumbers.get(r.getRoomId()),
 						r.getSectionId() == null ? null : sectionNames.get(r.getSectionId()),
 						r.getBedId() == null ? null : bedNumbers.get(r.getBedId()), pgId, pgName))
 				.toList();
+
 		return new Today(today, collected, spent, collected.subtract(spent), pay, exp, checkIns);
 	}
 }

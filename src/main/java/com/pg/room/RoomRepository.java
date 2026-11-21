@@ -14,6 +14,8 @@ public interface RoomRepository extends JpaRepository<Room, Long> {
 
 	List<Room> findByPgIdOrderByNumber(Long pgId);
 
+	List<Room> findByPgIdIn(java.util.Collection<Long> pgIds);
+
 	Optional<Room> findByPgIdAndId(Long pgId, Long id);
 
 	/** One row: [room count, total beds]. */

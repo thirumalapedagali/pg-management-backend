@@ -11,6 +11,10 @@ public interface BedRepository extends JpaRepository<Bed, Long> {
 
 	List<Bed> findByPgIdAndRoomIdOrderByBedNumber(Long pgId, Long roomId);
 
+	List<Bed> findByPgIdIn(java.util.Collection<Long> pgIds);
+
+	long countByStatus(BedStatus status);
+
 	List<Bed> findByPgIdAndSectionIdOrderByBedNumber(Long pgId, Long sectionId);
 
 	List<Bed> findByPgIdOrderByBedNumber(Long pgId);

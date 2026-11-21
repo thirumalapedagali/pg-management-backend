@@ -21,4 +21,8 @@ public interface MealAttendanceRepository extends JpaRepository<MealAttendance, 
 	/** Rows of {mealId, attending (true / false), number of residents} for one date. */
 	@Query("select a.mealId, a.attending, count(a) from MealAttendance a where a.pgId = :pgId and a.mealDate = :date group by a.mealId, a.attending")
 	List<Object[]> countByMeal(@Param("pgId") Long pgId, @Param("date") LocalDate date);
+
+	/** Rows of {mealDate, mealId, attending (true / false), number of residents} for several dates in one trip. */
+	@Query("select a.mealDate, a.mealId, a.attending, count(a) from MealAttendance a where a.pgId = :pgId and a.mealDate in :dates group by a.mealDate, a.mealId, a.attending")
+	List<Object[]> countByMealOnDates(@Param("pgId") Long pgId, @Param("dates") Collection<LocalDate> dates);
 }

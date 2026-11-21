@@ -15,6 +15,10 @@ public interface ResidentRepository extends JpaRepository<Resident, Long> {
 
 	List<Resident> findByPgIdAndStatusOrderByName(Long pgId, ResidentStatus status);
 
+	List<Resident> findByPgIdInAndStatus(java.util.Collection<Long> pgIds, ResidentStatus status);
+
+	long countByStatus(ResidentStatus status);
+
 	long countByPgIdAndStatus(Long pgId, ResidentStatus status);
 
 	long countByPgIdAndStatusAndNoticeStatus(Long pgId, ResidentStatus status, NoticeStatus noticeStatus);

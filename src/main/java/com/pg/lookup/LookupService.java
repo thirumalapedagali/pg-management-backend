@@ -2,6 +2,7 @@ package com.pg.lookup;
 
 import java.util.List;
 
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -20,6 +21,7 @@ public class LookupService {
 		this.repo = repo;
 	}
 
+	@Cacheable(value = "lookups", key = "#category")
 	public List<LookupItem> list(String category) {
 		return repo.findByCategoryAndActiveTrueOrderBySortOrderAscLabelAsc(category.trim().toUpperCase()).stream()
 				.map(v -> new LookupItem(v.getCode(), v.getLabel(), v.getExtra())).toList();

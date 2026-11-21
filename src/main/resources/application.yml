@@ -32,6 +32,23 @@ logging:
 cloudinary:
   url: cloudinary://634464576123254:Tn6YCVNOd75SMU_a3GdiXnLUUlk@dbrszzpci
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+  endpoint:
+    health:
+      show-details: always	
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true
+      percentiles:
+        http.server.requests: 0.5,0.95,0.99
+
+http.server.requests: true
 app:
   timezone: ${APP_TIMEZONE:Asia/Kolkata}
   # Location-based stay search.
@@ -73,3 +90,9 @@ app:
     username: ${BOOTSTRAP_ADMIN_USERNAME:superadmin}
     mobile: ${BOOTSTRAP_ADMIN_MOBILE:9999999999}
     password: ${BOOTSTRAP_ADMIN_PASSWORD:}
+  # Where owners pay to renew their subscription. The super admin extends the licence after confirming the payment.
+  subscription:
+    upi-id: ${SUBSCRIPTION_UPI_ID:}
+    upi-name: ${SUBSCRIPTION_UPI_NAME:MyStay}
+    support-mobile: ${SUBSCRIPTION_SUPPORT_MOBILE:}
+

@@ -182,32 +182,16 @@ public class AdminConsoleController {
 			}
 		}
 
-		List<com.pg.room.Bed> allBeds = beds.findAll();
-		long totalBeds = allBeds.size();
-		long occupiedBeds = 0;
-		long vacantBeds = 0;
-		for (com.pg.room.Bed b : allBeds) {
-			if (b.getStatus() == com.pg.room.BedStatus.OCCUPIED) {
-				occupiedBeds++;
-			} else if (b.getStatus() == com.pg.room.BedStatus.VACANT) {
-				vacantBeds++;
-			}
-		}
+		long totalBeds = beds.count();
+		long occupiedBeds = beds.countByStatus(com.pg.room.BedStatus.OCCUPIED);
+		long vacantBeds = beds.countByStatus(com.pg.room.BedStatus.VACANT);
 		double occupancyRate = totalBeds > 0 ? (double) occupiedBeds / totalBeds * 100.0 : 0.0;
 
-		long totalActiveResidents = residents.findAll().stream()
-				.filter(r -> r.getStatus() == com.pg.resident.ResidentStatus.ACTIVE)
-				.count();
+		long totalActiveResidents = residents.countByStatus(com.pg.resident.ResidentStatus.ACTIVE);
 
-		long openComplaints = complaints.findAll().stream()
-				.filter(c -> c.getStatus() == com.pg.complaint.ComplaintStatus.OPEN)
-				.count();
-		long inProgressComplaints = complaints.findAll().stream()
-				.filter(c -> c.getStatus() == com.pg.complaint.ComplaintStatus.IN_PROGRESS)
-				.count();
-		long pendingBookings = bookingRequests.findAll().stream()
-				.filter(b -> b.getStatus() == com.pg.booking.BookingRequestStatus.PENDING)
-				.count();
+		long openComplaints = complaints.countByStatus(com.pg.complaint.ComplaintStatus.OPEN);
+		long inProgressComplaints = complaints.countByStatus(com.pg.complaint.ComplaintStatus.IN_PROGRESS);
+		long pendingBookings = bookingRequests.countByStatus(com.pg.booking.BookingRequestStatus.PENDING);
 		long pendingRegistrations = registrations.countByStatus(com.pg.registration.RegistrationStatus.PENDING);
 
 		return new AdminAnalytics(

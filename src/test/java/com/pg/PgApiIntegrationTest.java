@@ -754,6 +754,59 @@ class PgApiIntegrationTest {
 		long cId = call("POST", "/api/me/complaints", res, "{\"category\":\"" + category + "\",\"title\":\"Leak\",\"description\":\"Tap leaks\"}").body().get("id").asLong();
 		assertThat(call("PUT", "/api/complaints/" + cId, o, "{\"status\":\"RESOLVED\",\"resolutionNotes\":\"Fixed\"}").status()).isEqualTo(200);
 	}
+	@Test
+	void menuSummaryCountsAnswersAndAFreshAnswerShowsOnTheNextCall() throws Exception {
+		String admin = login("superadmin", "DevAdmin#123");
+		createPg(admin, "Menu PG", "ownerMenu", "9000000351");
+		String o = login("ownerMenu", "OwnerPass#1");
+		long roomId = call("POST", "/api/rooms", o, "{\"number\":\"M1\",\"capacity\":2,\"rent\":5000}").body().get("id").asLong();
+		call("POST", "/api/residents", o, "{\"name\":\"Eater\",\"phone\":\"9000000352\",\"aadhaar\":\"123456789012\",\"roomId\":" + roomId
+				+ ",\"joinedOn\":\"" + LocalDate.now() + "\"}");
+		String res = login("9000000352", "9012");
+
+		// One meal that runs all day on every weekday: served now today and again tomorrow.
+		assertThat(call("POST", "/api/menu", o, "{\"name\":\"Lunch\",\"startTime\":\"0:00\",\"endTime\":\"23:59\",\"items\":\"Rice\","
+				+ "\"days\":[1,2,3,4,5,6,7]}").status()).isEqualTo(200);
+
+		// First call fills the cache. Today's meal has started; tomorrow's has not.
+		JsonNode before = call("GET", "/api/menu/summary", o, null).body();
+		assertThat(before.get("activeResidents").asLong()).isEqualTo(1);
+		JsonNode upcoming = null;
+		for (JsonNode m : before.get("meals")) {
+			if ("UPCOMING".equals(m.get("state").asString())) {
+				upcoming = m;
+			}
+		}
+		assertThat(upcoming).as("tomorrow's meal").isNotNull();
+		assertThat(upcoming.get("attending").asLong()).isZero();
+		assertThat(upcoming.get("notAnswered").asLong()).isEqualTo(1);
+		long mealId = upcoming.get("mealId").asLong();
+		String date = upcoming.get("date").asString();
+
+		// The resident answers; the write evicts the cached rows, so the owner sees it straight away.
+		assertThat(call("POST", "/api/me/meals/attend", res, "{\"mealId\":" + mealId + ",\"date\":\"" + date + "\",\"attending\":true}").status())
+				.isEqualTo(200);
+		JsonNode after = null;
+		for (JsonNode m : call("GET", "/api/menu/summary", o, null).body().get("meals")) {
+			if ("UPCOMING".equals(m.get("state").asString())) {
+				after = m;
+			}
+		}
+		assertThat(after.get("attending").asLong()).isEqualTo(1);
+		assertThat(after.get("notAttending").asLong()).isZero();
+		assertThat(after.get("notAnswered").asLong()).isZero();
+
+		// Changing the answer to "no" moves the count across.
+		call("POST", "/api/me/meals/attend", res, "{\"mealId\":" + mealId + ",\"date\":\"" + date + "\",\"attending\":false}");
+		for (JsonNode m : call("GET", "/api/menu/summary", o, null).body().get("meals")) {
+			if ("UPCOMING".equals(m.get("state").asString())) {
+				assertThat(m.get("attending").asLong()).isZero();
+				assertThat(m.get("notAttending").asLong()).isEqualTo(1);
+			}
+		}
+	}
+
+
 
 	@Test
 	void ownerPostsRulesAndOnlyResidentsOfThatPropertyReadThem() throws Exception {

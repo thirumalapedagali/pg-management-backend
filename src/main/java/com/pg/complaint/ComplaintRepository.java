@@ -33,4 +33,6 @@ public interface ComplaintRepository extends JpaRepository<Complaint, Long> {
 	Optional<Complaint> findByPgIdAndId(Long pgId, Long id);
 
 	long countByPgIdAndStatus(Long pgId, ComplaintStatus status);
+
+	long countByStatus(ComplaintStatus status);
 }

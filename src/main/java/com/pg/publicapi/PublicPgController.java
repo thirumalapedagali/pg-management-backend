@@ -284,11 +284,29 @@ public class PublicPgController {
 			}
 		}
 		if (!missing.isEmpty()) {
+			List<Long> missingIds = missing.stream().map(Pg::getId).toList();
+
 			Map<Long, List<String>> pictures = new HashMap<>();
-			media.findByOwnerTypeAndOwnerIdInOrderById("PROPERTY", missing.stream().map(Pg::getId).toList())
+			media.findByOwnerTypeAndOwnerIdInOrderById("PROPERTY", missingIds)
 					.forEach(m -> pictures.computeIfAbsent(m.getOwnerId(), k -> new ArrayList<>()).add(m.getUrl()));
+
+			Map<Long, List<Room>> roomsMap = rooms.findByPgIdIn(missingIds).stream()
+					.collect(java.util.stream.Collectors.groupingBy(Room::getPgId));
+
+			Map<Long, List<Bed>> bedsMap = beds.findByPgIdIn(missingIds).stream()
+					.collect(java.util.stream.Collectors.groupingBy(Bed::getPgId));
+
+			Map<Long, List<com.pg.resident.Resident>> resMap = residents.findByPgIdInAndStatus(missingIds, com.pg.resident.ResidentStatus.ACTIVE).stream()
+					.collect(java.util.stream.Collectors.groupingBy(com.pg.resident.Resident::getPgId));
+
 			for (Pg pg : missing) {
-				PublicPgSummaryResponse card = summaryCard(pg, pictures.getOrDefault(pg.getId(), List.of()));
+				PublicPgSummaryResponse card = summaryCard(
+						pg,
+						pictures.getOrDefault(pg.getId(), List.of()),
+						roomsMap.getOrDefault(pg.getId(), List.of()),
+						bedsMap.getOrDefault(pg.getId(), List.of()),
+						resMap.getOrDefault(pg.getId(), List.of())
+				);
 				cache.putPublicData(new PublicKey("summary", null, pg.getId()), card);
 				cards.put(pg.getId(), card);
 			}
@@ -303,26 +321,23 @@ public class PublicPgController {
 	}
 
 	/** The list card of one property, without the distance (that depends on who is asking). */
-	private PublicPgSummaryResponse summaryCard(Pg pg, List<String> pictures) {
-		{
-			List<Room> pgRooms = rooms.findByPgIdOrderByNumber(pg.getId());
-			List<Bed> pgBeds = beds.findByPgIdOrderByBedNumber(pg.getId());
-			int totalBeds = pgBeds.size();
-			int vacantBeds = (int) pgBeds.stream().filter(b -> b.getStatus() == BedStatus.VACANT).count();
-			Map<Long, BedStatus> bedStatus = new HashMap<>();
-			pgBeds.forEach(b -> bedStatus.put(b.getId(), b.getStatus()));
-			int upcomingBeds = 0;
-			LocalDate soonest = null;
-			for (com.pg.resident.Resident res : residents.findByPgIdAndStatusOrderByName(pg.getId(), com.pg.resident.ResidentStatus.ACTIVE)) {
-				if (res.getBedId() != null && res.getNoticeStatus() == com.pg.resident.NoticeStatus.APPROVED
-						&& res.getVacateOn() != null && bedStatus.get(res.getBedId()) != null
-						&& bedStatus.get(res.getBedId()) != BedStatus.VACANT) {
-					upcomingBeds++;
-					if (soonest == null || res.getVacateOn().isBefore(soonest)) {
-						soonest = res.getVacateOn();
-					}
+	private PublicPgSummaryResponse summaryCard(Pg pg, List<String> pictures, List<Room> pgRooms, List<Bed> pgBeds, List<com.pg.resident.Resident> pgActiveResidents) {
+		int totalBeds = pgBeds.size();
+		int vacantBeds = (int) pgBeds.stream().filter(b -> b.getStatus() == BedStatus.VACANT).count();
+		Map<Long, BedStatus> bedStatus = new HashMap<>();
+		pgBeds.forEach(b -> bedStatus.put(b.getId(), b.getStatus()));
+		int upcomingBeds = 0;
+		LocalDate soonest = null;
+		for (com.pg.resident.Resident res : pgActiveResidents) {
+			if (res.getBedId() != null && res.getNoticeStatus() == com.pg.resident.NoticeStatus.APPROVED
+					&& res.getVacateOn() != null && bedStatus.get(res.getBedId()) != null
+					&& bedStatus.get(res.getBedId()) != BedStatus.VACANT) {
+				upcomingBeds++;
+				if (soonest == null || res.getVacateOn().isBefore(soonest)) {
+					soonest = res.getVacateOn();
 				}
 			}
+		}
 
 			// Calculate lowest price from vacant beds or rooms
 			BigDecimal minRent = pg.getStartingPrice();
@@ -345,37 +360,36 @@ public class PublicPgController {
 				}
 			}
 
-			List<String> amenitiesList = parseAmenities(pg.getAmenities());
-			return new PublicPgSummaryResponse(
-					pg.getId(),
-					pg.getName(),
-					pg.getOwnerName(),
-					pg.getMobile(),
-					pg.getEmail(),
-					pg.getAddress(),
-					pg.getCity(),
-					pg.getState(),
-					pg.getTotalFloors(),
-					pg.getStayType() != null ? pg.getStayType() : "PG",
-					pg.getUnitLabel() != null ? pg.getUnitLabel() : "Room",
-					pg.getLocationUrl(),
-					pg.getGenderType() != null ? pg.getGenderType() : "CO_LIVING",
-					pg.getUpiId(),
-					pg.getUpiName(),
-					pg.getDescription(),
-					amenitiesList,
-					minRent != null ? minRent : BigDecimal.valueOf(5000),
-					pgRooms.size(),
-					totalBeds,
-					vacantBeds,
-					upcomingBeds,
-					soonest,
-					pictures,
-					null,
-					pg.getLatitude(),
-					pg.getLongitude()
-			);
-		}
+		List<String> amenitiesList = parseAmenities(pg.getAmenities());
+		return new PublicPgSummaryResponse(
+				pg.getId(),
+				pg.getName(),
+				pg.getOwnerName(),
+				pg.getMobile(),
+				pg.getEmail(),
+				pg.getAddress(),
+				pg.getCity(),
+				pg.getState(),
+				pg.getTotalFloors(),
+				pg.getStayType() != null ? pg.getStayType() : "PG",
+				pg.getUnitLabel() != null ? pg.getUnitLabel() : "Room",
+				pg.getLocationUrl(),
+				pg.getGenderType() != null ? pg.getGenderType() : "CO_LIVING",
+				pg.getUpiId(),
+				pg.getUpiName(),
+				pg.getDescription(),
+				amenitiesList,
+				minRent != null ? minRent : BigDecimal.valueOf(5000),
+				pgRooms.size(),
+				totalBeds,
+				vacantBeds,
+				upcomingBeds,
+				soonest,
+				pictures,
+				null,
+				pg.getLatitude(),
+				pg.getLongitude()
+		);
 	}
 
 	/** Great-circle (haversine) distance in kilometres. */

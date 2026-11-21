@@ -27,4 +27,6 @@ public interface BookingRequestRepository extends JpaRepository<BookingRequest, 
 	Optional<BookingRequest> findByPgIdAndId(Long pgId, Long id);
 
 	long countByPgIdAndStatus(Long pgId, BookingRequestStatus status);
+
+	long countByStatus(BookingRequestStatus status);
 }

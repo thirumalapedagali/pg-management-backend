@@ -34,6 +34,29 @@ import jakarta.servlet.http.HttpServletResponse;
  */
 public class JwtFilter extends OncePerRequestFilter {
 
+	private static final long CACHE_TTL_MS = 30_000; // 30-second TTL to avoid DB hit per request while keeping status updates instant
+
+	private static class CachedUser {
+		final UserEntity user;
+		final long timestamp;
+		CachedUser(UserEntity user, long timestamp) {
+			this.user = user;
+			this.timestamp = timestamp;
+		}
+	}
+
+	private static class CachedPg {
+		final Pg pg;
+		final long timestamp;
+		CachedPg(Pg pg, long timestamp) {
+			this.pg = pg;
+			this.timestamp = timestamp;
+		}
+	}
+
+	private final java.util.Map<Long, CachedUser> userCache = new java.util.concurrent.ConcurrentHashMap<>();
+	private final java.util.Map<Long, CachedPg> pgCache = new java.util.concurrent.ConcurrentHashMap<>();
+
 	private final JwtService jwtService;
 	private final UserRepository users;
 	private final PgRepository pgs;
@@ -61,6 +84,38 @@ public class JwtFilter extends OncePerRequestFilter {
 		}
 	}
 
+	private UserEntity findCachedUser(Long userId) {
+		if (userId == null) return null;
+		long now = System.currentTimeMillis();
+		CachedUser cached = userCache.get(userId);
+		if (cached != null && (now - cached.timestamp) < CACHE_TTL_MS) {
+			return cached.user;
+		}
+		UserEntity u = users.findById(userId).orElse(null);
+		if (u != null) {
+			userCache.put(userId, new CachedUser(u, now));
+		} else {
+			userCache.remove(userId);
+		}
+		return u;
+	}
+
+	private Pg findCachedPg(Long pgId) {
+		if (pgId == null) return null;
+		long now = System.currentTimeMillis();
+		CachedPg cached = pgCache.get(pgId);
+		if (cached != null && (now - cached.timestamp) < CACHE_TTL_MS) {
+			return cached.pg;
+		}
+		Pg p = pgs.findById(pgId).orElse(null);
+		if (p != null) {
+			pgCache.put(pgId, new CachedPg(p, now));
+		} else {
+			pgCache.remove(pgId);
+		}
+		return p;
+	}
+
 	private void authenticate(String token) {
 		TokenData data;
 		try {
@@ -68,7 +123,7 @@ public class JwtFilter extends OncePerRequestFilter {
 		} catch (JwtException | IllegalArgumentException e) {
 			return;
 		}
-		UserEntity user = data.userId() == null ? null : users.findById(data.userId()).orElse(null);
+		UserEntity user = findCachedUser(data.userId());
 		if (user == null || user.getStatus() != Status.ACTIVE || user.getRole() != data.role()) {
 			return;
 		}
@@ -79,7 +134,7 @@ public class JwtFilter extends OncePerRequestFilter {
 			if (!allowed) {
 				return;
 			}
-			Pg pg = pgs.findById(data.pgId()).orElse(null);
+			Pg pg = findCachedPg(data.pgId());
 			if (pg == null || !pg.isLicenseValid()) {
 				return;
 			}

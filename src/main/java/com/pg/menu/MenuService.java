@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.pg.common.AppClock;
 import com.pg.common.BadRequestException;
 import com.pg.common.NotFoundException;
+import com.pg.dashboard.DashboardCache;
 import com.pg.resident.ResidentRepository;
 import com.pg.resident.ResidentStatus;
 import com.pg.tenant.TenantContext;
@@ -73,17 +74,26 @@ public class MenuService {
 	public record MenuSummary(long activeResidents, List<MealSummary> meals) {
 	}
 
+	/**
+	 * What the owner summary is built from: the active head count, the meals of today's and tomorrow's weekdays, and
+	 * the yes / no counts per date. The NOW / UPCOMING state depends on the clock, so it is not part of this.
+	 */
+	private record SummaryData(long active, List<MenuMeal> meals, Map<LocalDate, Map<Long, long[]>> counts) {
+	}
+
 	private final MenuMealRepository meals;
 	private final MealAttendanceRepository attendance;
 	private final ResidentRepository residents;
 	private final AppClock clock;
+	private final DashboardCache cache;
 
 	public MenuService(MenuMealRepository meals, MealAttendanceRepository attendance, ResidentRepository residents,
-			AppClock clock) {
+			AppClock clock, DashboardCache cache) {
 		this.residents = residents;
 		this.meals = meals;
 		this.attendance = attendance;
 		this.clock = clock;
+		this.cache = cache;
 	}
 
 	/** The whole week, in weekday then time order. */
@@ -172,17 +182,24 @@ public class MenuService {
 	/**
 	 * For the owner's home screen: the meals being served now and the rest of today and tomorrow, with how many
 	 * residents said yes, no, or have not answered yet.
+	 * <p>
+	 * The database rows are cached per property and day ({@link DashboardCache}); any write to the property (a menu
+	 * edit, a resident's answer, a new resident) evicts them. Only the NOW / UPCOMING state is worked out per call.
+	 * Not {@code @Transactional}: a cache hit must not take a connection, and each repository call has its own.
 	 */
-	@Transactional(readOnly = true)
 	public MenuSummary summary() {
 		Long pgId = TenantContext.requirePgId();
 		LocalDate today = clock.today();
 		LocalTime now = clock.now().toLocalTime();
-		long active = residents.countByPgIdAndStatus(pgId, ResidentStatus.ACTIVE);
+		SummaryData data = cache.pg("menu-summary", pgId, today, () -> loadSummaryData(pgId, today));
+		long active = data.active();
 		List<MealSummary> out = new ArrayList<>();
 		for (LocalDate date : List.of(today, today.plusDays(1))) {
-			Map<Long, long[]> counted = countMap(pgId, date);
-			for (MenuMeal m : meals.findByPgIdAndDayOfWeekOrderByStartTimeAsc(pgId, date.getDayOfWeek().getValue())) {
+			Map<Long, long[]> counted = data.counts().getOrDefault(date, Map.of());
+			for (MenuMeal m : data.meals()) {
+				if (m.getDayOfWeek() != date.getDayOfWeek().getValue()) {
+					continue;
+				}
 				boolean isToday = date.equals(today);
 				if (isToday && !m.getEndTime().isAfter(now)) {
 					continue;
@@ -195,6 +212,21 @@ public class MenuService {
 			}
 		}
 		return new MenuSummary(active, out);
+	}
+
+	/** Three queries (head count, meals of both weekdays, answers for both dates) instead of one per meal and date. */
+	private SummaryData loadSummaryData(Long pgId, LocalDate today) {
+		LocalDate tomorrow = today.plusDays(1);
+		long active = residents.countByPgIdAndStatus(pgId, ResidentStatus.ACTIVE);
+		List<MenuMeal> weekdayMeals = meals.findByPgIdAndDayOfWeekInOrderByStartTimeAsc(pgId,
+				List.of(today.getDayOfWeek().getValue(), tomorrow.getDayOfWeek().getValue()));
+		Map<LocalDate, Map<Long, long[]>> counts = new HashMap<>();
+		for (Object[] r : attendance.countByMealOnDates(pgId, List.of(today, tomorrow))) {
+			long[] c = counts.computeIfAbsent((LocalDate) r[0], k -> new HashMap<>()).computeIfAbsent((Long) r[1],
+					k -> new long[2]);
+			c[(Boolean) r[2] ? 0 : 1] = (Long) r[3];
+		}
+		return new SummaryData(active, weekdayMeals, counts);
 	}
 	
 	/** {mealId -> [yes, no]} for one date. */

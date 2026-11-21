@@ -132,7 +132,7 @@ public class AuthController {
 			if (!access.owns(user, pg.getId())) {
 				throw new ForbiddenException("This property does not belong to you");
 			}
-			requireValidPg(pg);
+			requireValidPg(pg, user.getRole());
 		}
 		return new LoginResponse(jwt.issue(user, pg.getId()), user.getRole(), user.getId(), user.getUsername(),
 				pg.getId(), pg.getName(), pg.getTotalFloors(), user.getResidentId(), false, List.of(), user.isMustChangePassword());
@@ -187,7 +187,7 @@ public class AuthController {
 			}
 		} else if (user.getRole() == Role.OWNER && access.owns(user, pgId)) {
 			// Stay in the property the owner switched to.
-			pgId = requireValidPg(pgs.findById(pgId).orElse(null)).getId();
+			pgId = requireValidPg(pgs.findById(pgId).orElse(null), user.getRole()).getId();
 		} else {
 			pgId = requireValidPg(user).getId();
 		}
@@ -231,15 +231,16 @@ public class AuthController {
 	}
 
 	private Pg requireValidPg(UserEntity user) {
-		return requireValidPg(user.getPgId() == null ? null : pgs.findById(user.getPgId()).orElse(null));
+		return requireValidPg(user.getPgId() == null ? null : pgs.findById(user.getPgId()).orElse(null), user.getRole());
 	}
 
-	private Pg requireValidPg(Pg pg) {
+	private Pg requireValidPg(Pg pg, Role role) {
 		if (pg == null) {
 			throw new UnauthorizedException(BAD_CREDENTIALS);
 		}
 		if (!pg.isLicenseValid()) {
-			throw new LicenseExpiredException("Licence expired for this PG. Please contact the administrator.");
+			throw new LicenseExpiredException("Your subscription has expired. Please renew it to continue.", role.name(),
+					pg.getLicenseExpiry());
 		}
 		return pg;
 	}

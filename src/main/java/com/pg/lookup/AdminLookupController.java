@@ -3,6 +3,7 @@ package com.pg.lookup;
 import java.util.List;
 import java.util.Locale;
 
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -57,6 +58,7 @@ public class AdminLookupController {
 
 	@PostMapping
 	@Transactional
+	@CacheEvict(value = "lookups", allEntries = true)
 	public LookupRow add(@Valid @RequestBody CreateRequest req) {
 		String category = req.category().trim().toUpperCase(Locale.ROOT);
 		String code = req.code().trim().toUpperCase(Locale.ROOT);
@@ -70,6 +72,7 @@ public class AdminLookupController {
 
 	@PutMapping("/{id}")
 	@Transactional
+	@CacheEvict(value = "lookups", allEntries = true)
 	public LookupRow update(@PathVariable Long id, @Valid @RequestBody UpdateRequest req) {
 		LookupValue v = repo.findById(id).orElseThrow(() -> new NotFoundException("Lookup value not found"));
 		if (req.label() != null) {
