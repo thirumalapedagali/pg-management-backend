@@ -8,6 +8,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -243,31 +246,33 @@ public class PublicPgController {
 			throw new BadRequestException("size must be between 1 and " + MAX_PAGE_SIZE);
 		}
 
-		// The active properties are the same for every visitor, so they are read once and reused (see DashboardCache).
 		String cityFilter = city == null ? "" : city.trim().toLowerCase();
-		List<Pg> allPgs = cache.publicData(new PublicKey("active", cityFilter, null), () -> pgs.findAll().stream()
-				.filter(Pg::isActive)
-				.filter(p -> cityFilter.isEmpty() || p.getCity() != null && p.getCity().toLowerCase().contains(cityFilter))
-				.toList());
+		Pageable pageable = PageRequest.of(pageNo, pageSize);
+
+		Page<Pg> pagedPgs;
+		if (latitude != null && longitude != null) {
+			pagedPgs = pgs.findActivePgsByLocationPaged(cityFilter, latitude, longitude, pageable);
+		} else {
+			pagedPgs = pgs.findActivePgsByCityPaged(cityFilter, pageable);
+		}
+
+		List<Pg> pageItems = pagedPgs.getContent();
+		long total = pagedPgs.getTotalElements();
+		int totalPages = pagedPgs.getTotalPages();
+
+		if (pageItems.isEmpty()) {
+			return new Paged<>(List.of(), pageNo, pageSize, total, totalPages);
+		}
 
 		Map<Long, Double> distances = new HashMap<>();
-		if (latitude != null) {
-			for (Pg p : allPgs) {
+		if (latitude != null && longitude != null) {
+			for (Pg p : pageItems) {
 				if (p.getLatitude() != null && p.getLongitude() != null) {
 					distances.put(p.getId(), distanceKm(latitude, longitude, p.getLatitude(), p.getLongitude()));
 				}
 			}
-			allPgs = allPgs.stream().sorted(Comparator
-					.comparing((Pg p) -> distances.getOrDefault(p.getId(), Double.MAX_VALUE)).thenComparing(Pg::getId))
-					.toList();
-		} else {
-			allPgs = allPgs.stream().sorted(Comparator.comparing(Pg::getId)).toList();
 		}
 
-		int total = allPgs.size();
-		int from = (int) Math.min((long) pageNo * pageSize, total);
-		List<Pg> pageItems = allPgs.subList(from, (int) Math.min((long) from + pageSize, total));
-		int totalPages = (int) Math.ceil(total / (double) pageSize);
 		if (pageItems.isEmpty()) {
 			return new Paged<>(List.of(), pageNo, pageSize, total, totalPages);
 		}

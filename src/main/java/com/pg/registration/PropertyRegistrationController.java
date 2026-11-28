@@ -34,7 +34,7 @@ public class PropertyRegistrationController {
 	@PostMapping("/api/public/owner-registrations")
 	public Map<String, String> submit(@Valid @RequestBody SubmitRequest req) {
 		service.submit(req);
-		return Map.of("message", "Request received. You can sign in once the administrator approves it.");
+		return Map.of("message", "Your property is ready. Sign in with your mobile number and password.");
 	}
 
 	@GetMapping("/api/admin/registrations")

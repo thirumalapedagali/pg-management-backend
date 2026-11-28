@@ -426,7 +426,7 @@ public class ResidentService {
 			beds.save(assignedBed);
 		}
 
-		createLogin(r, req.aadhaar());
+		WhatsAppService.WelcomeLogin login = createLogin(r, req.aadhaar());
 		notifyBedOccupied(pgId, r, assignedBed);
 
 		// Send WhatsApp Welcome Message safely
@@ -435,7 +435,7 @@ public class ResidentService {
 			String pgName = pg != null ? pg.getName() : "PG Management";
 			String bedNum = assignedBed != null ? assignedBed.getBedNumber() : null;
 			whatsAppService.sendWelcomeMessage(pgId, pgName, r.getName(), r.getPhone(),
-					room.getNumber(), bedNum, r.getRentOverride(), r.getSecurityDeposit(), r.getJoinedOn());
+					room.getNumber(), bedNum, r.getRentOverride(), r.getSecurityDeposit(), r.getJoinedOn(), login);
 		} catch (Exception ex) {
 			log.warn("Failed to trigger WhatsApp welcome message for resident {}: {}", r.getId(), ex.getMessage());
 		}
@@ -466,10 +466,10 @@ public class ResidentService {
 	 * (the resident must change it at first login). An existing login on that number is linked instead. The Aadhaar
 	 * number itself is never stored.
 	 */
-	private void createLogin(Resident r, String aadhaar) {
+	private WhatsAppService.WelcomeLogin createLogin(Resident r, String aadhaar) {
 		String phone = r.getPhone();
 		if (phone == null || phone.length() > 15 || aadhaar == null || !aadhaar.matches("\\d{12}")) {
-			return;
+			return WhatsAppService.WelcomeLogin.NONE;
 		}
 		UserEntity existing = users.findByMobile(phone).or(() -> users.findByUsername(phone)).orElse(null);
 		if (existing != null) {
@@ -479,7 +479,7 @@ public class ResidentService {
 			existing.setPgId(r.getPgId());
 			existing.setResidentId(r.getId());
 			users.save(existing);
-			return;
+			return WhatsAppService.WelcomeLogin.EXISTING;
 		}
 		UserEntity u = new UserEntity();
 		u.setUsername(phone);
@@ -491,6 +491,7 @@ public class ResidentService {
 		u.setPassword(encoder.encode(aadhaar.substring(8)));
 		u.setMustChangePassword(true);
 		users.save(u);
+		return WhatsAppService.WelcomeLogin.NEW;
 	}
 
 	@Transactional
@@ -1082,7 +1083,8 @@ public class ResidentService {
 			String pgName = pg != null ? pg.getName() : "PG Management";
 			String bedNum = assignedBed != null ? assignedBed.getBedNumber() : null;
 			whatsAppService.sendWelcomeMessage(pgId, pgName, r.getName(), r.getPhone(),
-					room.getNumber(), bedNum, r.getRentOverride(), r.getSecurityDeposit(), r.getJoinedOn());
+					room.getNumber(), bedNum, r.getRentOverride(), r.getSecurityDeposit(), r.getJoinedOn(),
+					WhatsAppService.WelcomeLogin.NONE);
 		} catch (Exception ex) {
 			log.warn("Failed to trigger WhatsApp welcome message for rejoining resident {}: {}", r.getId(), ex.getMessage());
 		}

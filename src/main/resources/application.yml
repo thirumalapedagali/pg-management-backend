@@ -96,6 +96,8 @@ app:
     username: ${BOOTSTRAP_ADMIN_USERNAME:superadmin}
     mobile: ${BOOTSTRAP_ADMIN_MOBILE:9999999999}
     password: ${BOOTSTRAP_ADMIN_PASSWORD:}
+  # Play Store / App Store link sent to new residents in the WhatsApp welcome message. Empty = the message just names the app.
+  download-url: ${APP_DOWNLOAD_URL:}
   # Where owners pay to renew their subscription. The super admin extends the licence after confirming the payment.
   subscription:
     upi-id: ${SUBSCRIPTION_UPI_ID:}

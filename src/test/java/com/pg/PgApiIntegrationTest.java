@@ -497,10 +497,11 @@ class PgApiIntegrationTest {
 	}
 
 	@Test
-	void anOwnerRegistersAndCanOnlySignInOnceTheSuperAdminApproves() throws Exception {
+	void anOwnerRegistersAndCanUseTheAppStraightAwayWithoutApproval() throws Exception {
 		String admin = login("superadmin", "DevAdmin#123");
 		String form = "{\"ownerName\":\"Meena\",\"mobile\":\"9000000601\",\"password\":\"Meena#123\",\"name\":\"Meena Stay\","
-				+ "\"stayType\":\"PG\",\"city\":\"Pune\",\"upiId\":\"meena@upi\",\"totalFloors\":2,\"startingPrice\":6000}";
+				+ "\"stayType\":\"PG\",\"city\":\"Pune\",\"upiId\":\"meena@upi\",\"totalFloors\":2,\"startingPrice\":6000,"
+				+ "\"latitude\":18.5204,\"longitude\":73.8567}";
 
 		// The sign-up form reads its dropdowns before anyone is signed in.
 		assertThat(call("GET", "/api/lookups?category=STAY_TYPE", null, null).status()).isEqualTo(200);
@@ -508,60 +509,29 @@ class PgApiIntegrationTest {
 
 		assertThat(call("POST", "/api/public/owner-registrations", null, form).status()).isEqualTo(200);
 		assertThat(call("POST", "/api/public/owner-registrations", null, form).status())
-				.as("one open request per mobile").isEqualTo(400);
+				.as("the mobile number is already registered").isEqualTo(400);
 
-		// Nothing exists yet: no property in the public list and no usable login.
-		for (JsonNode p : call("GET", "/api/public/pgs", null, null).body()) {
-			assertThat(p.get("name").asString()).isNotEqualTo("Meena Stay");
-		}
-		Res waiting = call("POST", "/api/auth/login", null, "{\"username\":\"9000000601\",\"password\":\"Meena#123\"}");
-		assertThat(waiting.status()).isEqualTo(403);
-		assertThat(waiting.body().get("message").asString()).contains("waiting");
-		assertThat(call("POST", "/api/auth/login", null, "{\"username\":\"9000000601\",\"password\":\"wrong\"}").status())
-				.as("a wrong password learns nothing").isEqualTo(401);
-
-		// Only the super admin sees and decides requests.
-		assertThat(call("GET", "/api/admin/registrations", null, null).status()).isEqualTo(401);
-		createPg(admin, "Reg Owner PG", "ownerReg", "9000000602");
-		String owner = login("ownerReg", "OwnerPass#1");
-		assertThat(call("GET", "/api/admin/registrations", owner, null).status()).isEqualTo(403);
-
-		long id = -1;
-		for (JsonNode r : call("GET", "/api/admin/registrations?status=PENDING", admin, null).body()) {
-			if ("9000000601".equals(r.get("mobile").asString())) id = r.get("id").asLong();
-		}
-		assertThat(id).isPositive();
-		assertThat(call("GET", "/api/admin/stats", admin, null).body().get("pendingRegistrations").asInt()).isPositive();
-
-		Res approved = call("POST", "/api/admin/registrations/" + id + "/approve", admin, "{}");
-		assertThat(approved.status()).isEqualTo(200);
-		assertThat(approved.body().get("status").asString()).isEqualTo("APPROVED");
-		assertThat(call("POST", "/api/admin/registrations/" + id + "/approve", admin, "{}").status())
-				.as("decided once").isEqualTo(400);
-
-		// Now the owner signs in with the password chosen at sign-up, with nothing to change, and the stay is public.
+		// No approval step: the owner signs in at once with the password chosen at sign-up, with nothing to change.
 		Res in = call("POST", "/api/auth/login", null, "{\"username\":\"9000000601\",\"password\":\"Meena#123\"}");
 		assertThat(in.status()).isEqualTo(200);
 		assertThat(in.body().get("role").asString()).isEqualTo("OWNER");
 		assertThat(in.body().get("mustChangePassword").asBoolean()).isFalse();
+		assertThat(call("POST", "/api/auth/login", null, "{\"username\":\"9000000601\",\"password\":\"wrong\"}").status())
+				.as("a wrong password learns nothing").isEqualTo(401);
+
+		// The stay is public, and the owner can use the app (licence runs a month from creation).
 		boolean listed = false;
-		for (JsonNode p : call("GET", "/api/public/pgs", null, null).body()) {
+		for (JsonNode p : call("GET", "/api/public/pgs?city=Pune", null, null).body().get("content")) {
 			listed |= "Meena Stay".equals(p.get("name").asString());
 		}
 		assertThat(listed).isTrue();
+		String owner = in.body().get("token").asString();
+		assertThat(call("GET", "/api/rooms", owner, null).status()).isEqualTo(200);
 
-		// A refused request says so, with the reason.
-		String refused = "{\"ownerName\":\"Ravi\",\"mobile\":\"9000000603\",\"password\":\"Ravi#1234\",\"name\":\"Ravi Stay\"}";
-		assertThat(call("POST", "/api/public/owner-registrations", null, refused).status()).isEqualTo(200);
-		long rid = -1;
-		for (JsonNode r : call("GET", "/api/admin/registrations?status=PENDING", admin, null).body()) {
-			if ("9000000603".equals(r.get("mobile").asString())) rid = r.get("id").asLong();
-		}
-		assertThat(call("POST", "/api/admin/registrations/" + rid + "/reject", admin, "{\"reason\":\"Incomplete address\"}")
-				.status()).isEqualTo(200);
-		Res no = call("POST", "/api/auth/login", null, "{\"username\":\"9000000603\",\"password\":\"Ravi#1234\"}");
-		assertThat(no.status()).isEqualTo(403);
-		assertThat(no.body().get("message").asString()).contains("Incomplete address");
+		// Only the super admin sees the registration list.
+		assertThat(call("GET", "/api/admin/registrations", null, null).status()).isEqualTo(401);
+		assertThat(call("GET", "/api/admin/registrations", owner, null).status()).isEqualTo(403);
+		assertThat(call("GET", "/api/admin/registrations", admin, null).status()).isEqualTo(200);
 
 		assertThat(call("POST", "/api/auth/register", null, "{\"name\":\"Old\",\"mobile\":\"9000000604\",\"password\":\"abcd\"}")
 				.status()).as("residents no longer self-register").isIn(401, 403, 404, 405);

@@ -36,9 +36,23 @@ public class WhatsAppService {
 	private static final Logger logger = LoggerFactory.getLogger(WhatsAppService.class);
 	private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("dd-MMM-yyyy");
 
+	/** What the welcome message tells the resident about signing in to the app. */
+	public enum WelcomeLogin {
+		/** No app login was set up, so the message says nothing about it. */
+		NONE,
+		/** A new login: mobile number + last 4 digits of the Aadhaar number. */
+		NEW,
+		/** The mobile number already had a login, so its existing password still applies. */
+		EXISTING
+	}
+
 	private final PgNotificationConfigService configService;
 	private final WhatsappMessageLogRepository logRepository;
 	private final RestTemplate restTemplate = new RestTemplate();
+
+	/** Where residents download the app (Play Store / App Store link). Left empty, the message just names the app. */
+	@org.springframework.beans.factory.annotation.Value("${app.download-url:}")
+	private String appDownloadUrl;
 
 	public void send(Long pgId, String to, String message) {
 		post(pgId, to, "text", textBody(message), "GENERAL");
@@ -110,7 +124,7 @@ public class WhatsAppService {
 	}
 
 	public void sendWelcomeMessage(Long pgId, String pgName, String residentName, String phone, String roomNumber,
-			String bedNumber, BigDecimal rent, BigDecimal deposit, LocalDate joinedOn) {
+			String bedNumber, BigDecimal rent, BigDecimal deposit, LocalDate joinedOn, WelcomeLogin login) {
 		if (phone == null || phone.isBlank()) {
 			return;
 		}
@@ -131,18 +145,42 @@ public class WhatsAppService {
 				+ "📅 *Join Date:* %s\n"
 				+ "💵 *Monthly Rent:* ₹%s\n"
 				+ "🔒 *Security Deposit:* ₹%s\n\n"
+				+ "%s"
 				+ "Feel free to reach out to management for any assistance.\n"
 				+ "Wish you a comfortable stay! 🏠✨",
-				pgName != null ? pgName : "PG",
+				pgName != null ? pgName : "Stay",
 				residentName,
 				roomNumber != null ? roomNumber : "-",
 				bedInfo,
 				joinedStr,
 				rent != null ? rent.toPlainString() : "0",
-				deposit != null ? deposit.toPlainString() : "0"
+				deposit != null ? deposit.toPlainString() : "0",
+				loginInstructions(login, phone)
 		);
 
 		post(pgId, phone, "text", textBody(msg), "WELCOME");
+	}
+
+	/** The "download the app and sign in" part of the welcome message; empty when the resident has no app login. */
+	private String loginInstructions(WelcomeLogin login, String phone) {
+		if (login == null || login == WelcomeLogin.NONE) {
+			return "";
+		}
+		StringBuilder sb = new StringBuilder("📲 *Get the MyStay app*\n");
+		if (appDownloadUrl != null && !appDownloadUrl.isBlank()) {
+			sb.append("1. Download the app: ").append(appDownloadUrl.trim()).append("\n");
+		} else {
+			sb.append("1. Download the MyStay app on your phone\n");
+		}
+		sb.append("2. Sign in with:\n");
+		sb.append("   • *Mobile number:* ").append(phone.replaceAll("[^0-9]", "")).append("\n");
+		if (login == WelcomeLogin.NEW) {
+			sb.append("   • *Password:* the last 4 digits of your Aadhaar number\n");
+			sb.append("3. You will be asked to set a new password the first time you sign in.\n\n");
+		} else {
+			sb.append("   • *Password:* your existing MyStay password\n\n");
+		}
+		return sb.toString();
 	}
 
 	public void sendMoveNotification(Long pgId, String pgName, String residentName, String phone,
