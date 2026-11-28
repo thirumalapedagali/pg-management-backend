@@ -37,7 +37,7 @@ import jakarta.validation.Valid;
 @RequestMapping("/api/me")
 public class MeController {
 
-	public record PgInfo(Long id, String name, String stayType, String unitLabel, String locationUrl, String genderType, String upiId, String upiName, String ownerMobile, String ownerEmail) {
+	public record PgInfo(Long id, String name, String stayType, String unitLabel, String locationUrl, String genderType, String upiId, String upiName, String ownerMobile, String ownerEmail, String address, String city, String state) {
 	}
 
 	public record MyPayment(Long id, BigDecimal amount, LocalDate date, String mode, String transactionRef, String notes) {
@@ -83,7 +83,7 @@ public class MeController {
 		List<MyPayment> list = payments.findByPgIdAndResidentIdOrderByDateDescIdDesc(pgId, residentId)
 				.stream().map((Payment p) -> new MyPayment(p.getId(), p.getAmount(), p.getDate(), p.getMode(), p.getTransactionRef(), p.getNotes())).toList();
 		Pg pg = pgs.findById(pgId).orElse(null);
-		PgInfo pgInfo = pg != null ? new PgInfo(pg.getId(), pg.getName(), pg.getStayType() != null ? pg.getStayType() : "PG", pg.getUnitLabel() != null ? pg.getUnitLabel() : "Room", pg.getLocationUrl(), pg.getGenderType(), pg.getUpiId(), pg.getUpiName(), pg.getMobile(), pg.getEmail()) : null;
+		PgInfo pgInfo = pg != null ? new PgInfo(pg.getId(), pg.getName(), pg.getStayType() != null ? pg.getStayType() : "PG", pg.getUnitLabel() != null ? pg.getUnitLabel() : "Room", pg.getLocationUrl(), pg.getGenderType(), pg.getUpiId(), pg.getUpiName(), pg.getMobile(), pg.getEmail(), pg.getAddress(), pg.getCity(), pg.getState()) : null;
 		return new MyDues(r, list, pgInfo);
 	}
 

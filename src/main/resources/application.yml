@@ -13,7 +13,11 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-
+#	mail:
+#	 host: smtp.gmail.com
+#	 port: 587
+#	 username: mystay4u@gmail.com
+#	 password: mdwp yvdj sgbm cvtw
 
 logging:
   pattern:
@@ -26,7 +30,7 @@ logging:
     # Bound parameter values (? placeholders). TRACE to enable. Values can include personal data and
     # password hashes, so this is off unless you ask for it (or use the "dev" profile).
     org.hibernate.orm.jdbc.bind: ${SQL_BIND_LOG_LEVEL:INFO}
-    org.hibernate.SQL_SLOW: INFO			
+    org.hibernate.SQL_SLOW: INFO
 
 # File storage. Set CLOUDINARY_URL=cloudinary://<api_key>:<api_secret>@<cloud_name>; when empty, uploads are refused.
 cloudinary:
@@ -49,6 +53,8 @@ management:
         http.server.requests: 0.5,0.95,0.99
 
 http.server.requests: true
+mail:
+  enabled: false  
 app:
   timezone: ${APP_TIMEZONE:Asia/Kolkata}
   # Location-based stay search.

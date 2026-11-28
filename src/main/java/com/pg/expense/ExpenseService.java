@@ -30,7 +30,8 @@ public class ExpenseService {
 			@NotNull @DecimalMin("0.01") BigDecimal amount, LocalDate date) {
 	}
 
-	public record ExpenseResponse(Long id, String title, String category, BigDecimal amount, LocalDate date) {
+	public record ExpenseResponse(Long id, String title, String category, BigDecimal amount, LocalDate date,
+			String attachmentUrl) {
 	}
 
 	private final ExpenseRepository repo;
@@ -104,6 +105,7 @@ public class ExpenseService {
 	}
 
 	static ExpenseResponse toResponse(Expense e) {
-		return new ExpenseResponse(e.getId(), e.getTitle(), e.getCategory(), e.getAmount(), e.getDate());
+		return new ExpenseResponse(e.getId(), e.getTitle(), e.getCategory(), e.getAmount(), e.getDate(),
+				e.getAttachmentUrl());
 	}
 }

@@ -98,9 +98,12 @@ public class PropertyRegistrationService {
 		reg.setPayload(json.writeValueAsString(pg));
 		registrations.save(reg);
 
+		// No approval step: the property and the owner's login are created straight away.
+		// The licence (set in PgService.create) decides how long the owner can use the app.
+		approve(reg.getId());
+
 		try {
-			push.toSuperAdmins("New Owner Registration", "New registration request received from " + r.ownerName().trim() + " for " + r.name().trim() + ".");
-			push.toUserByMobile(null, mobile, "Registration Submitted", "Your registration request for " + r.name().trim() + " has been submitted successfully!");
+			push.toSuperAdmins("New Owner Joined", r.ownerName().trim() + " registered " + r.name().trim() + ".");
 		} catch (Exception e) {
 			// Fail-safe
 		}
@@ -128,7 +131,7 @@ public class PropertyRegistrationService {
 		reg.setDecidedAt(LocalDateTime.now());
 
 		try {
-			push.toUserByMobile(pgId, reg.getMobile(), "Registration Approved", "Congratulations! Your registration request for " + reg.getPropertyName() + " has been approved!");
+			push.toUserByMobile(pgId, reg.getMobile(), "Welcome to MyStay", reg.getPropertyName() + " is ready. You can start using the app now.");
 		} catch (Exception e) {
 			// Fail-safe
 		}

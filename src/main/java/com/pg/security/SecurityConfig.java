@@ -48,6 +48,11 @@ public class SecurityConfig {
 						.requestMatchers("/actuator/health").permitAll()
 						.requestMatchers("/actuator/metrics/**").permitAll()
 						.requestMatchers("/actuator/prometheus/**").permitAll()
+						.requestMatchers(
+						        "/swagger-ui/**",
+						        "/swagger-ui.html",
+						        "/v3/api-docs/**"
+						).permitAll()
 						// Error dispatches (404, 500...) must keep their status; otherwise the app sees them as 401 and signs the user out.
 						.requestMatchers("/error").permitAll()
 						// Public: login, registration, refresh, and public PG & room exploration.

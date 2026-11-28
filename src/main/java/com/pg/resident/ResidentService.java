@@ -613,6 +613,12 @@ public class ResidentService {
 
 		if (roomChanged && previousRoomNumber != null) {
 			try {
+				String where = "Room " + room.getNumber() + (assignedBed != null ? " · " + assignedBed.getBedNumber() : "");
+				push.toResident(pgId, r.getId(), "Room changed", "You have been moved to " + where + ".");
+			} catch (Exception ex) {
+				log.warn("Failed to push move notification for resident {}: {}", r.getId(), ex.getMessage());
+			}
+			try {
 				Pg pg = pgs.findById(pgId).orElse(null);
 				String pgName = pg != null ? pg.getName() : "PG Management";
 				String bedNum = assignedBed != null ? assignedBed.getBedNumber() : null;
